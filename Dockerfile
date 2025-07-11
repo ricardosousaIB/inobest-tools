@@ -18,4 +18,4 @@ EXPOSE 8501
 
 # Comando para rodar a aplicação Streamlit
 # Certifique-se de que 'app.py' é o nome do seu ficheiro principal Streamlit
-CMD ["streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+CMD ["streamlit", "run", "streamlit_app.py", "--server.port=8501", "--server.address=0.0.0.0"]
