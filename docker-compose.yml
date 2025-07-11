@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  streamlit-agregador:
+    # O nome da imagem será construído pelo Portainer a partir do Dockerfile no seu Git
+    # Certifique-se de que o "Image name" no Portainer corresponda a este nome
+    image: ricardosousaib/agregador-excel-streamlit:latest # Exemplo de nome de imagem
+    container_name: agregador-excel-app
+    ports:
+      - "8501:8501" # Mapeia a porta 8501 do host para a porta 8501 do contêiner
+    restart: unless-stopped # Garante que o contêiner reinicie automaticamente
+    # volumes:
+    #   - /caminho/no/seu/servidor/para/dados:/app/data # Exemplo: se precisar de persistir dados
+    # environment:
+    #   - VARIAVEL_DE_AMBIENTE=valor # Se sua app precisar de variáveis de ambiente
