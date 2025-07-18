@@ -251,14 +251,12 @@ def pdf_reducer_app():
             # Abrir o documento PDF a partir dos bytes em memória
             doc = fitz.open(stream=input_pdf_bytes, filetype="pdf")
             
-            # --- OPÇÕES DE OTIMIZAÇÃO GERAIS (SEM ARGUMENTOS DE IMAGEM DIRETOS) ---
-            # Estas opções focam-se na limpeza e compressão de streams,
-            # mas não na recompressão de imagens com qualidade/downsampling.
+            # --- OPÇÕES DE OTIMIZAÇÃO GERAIS (SEM ARGUMENTOS DE IMAGEM DIRETOS E SEM 'linear') ---
             opts = dict(
                 deflate=True, # Compressão de streams
                 clean=True,   # Remove objetos não utilizados
-                garbage=4,    # Nível de limpeza agressivo
-                linear=True   # Otimiza para visualização web (fast web view)
+                garbage=4     # Nível de limpeza agressivo
+                # REMOVIDO: linear=True # Este argumento não é mais suportado diretamente
             )
             
             # Criar um buffer de saída para o PDF otimizado
