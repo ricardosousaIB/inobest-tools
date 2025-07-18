@@ -198,139 +198,64 @@ def excel_aggregator_app():
         st.info("A aguardar o carregamento de um ficheiro ZIP contendo os ficheiros Excel...")
 
 # --- Função para o Redutor de PDF (COM A CORREÇÃO DO ARGUMENTO 'compress') ---
-def pdf_reducer_app():
-    st.header("Redutor de Ficheiros PDF")
-    st.write("Carrega um ficheiro PDF para otimizá-lo e reduzir o seu tamanho. O processo é feito inteiramente na memória RAM.")
-    st.write("Esta ferramenta usa PyMuPDF para recompressão de imagens e otimização de conteúdo.")
-
-    # Inicializa o session_state para o redutor de PDF
-    if 'pdf_processed_data' not in st.session_state:
-        st.session_state.pdf_processed_data = None
-    if 'pdf_original_size' not in st.session_state:
-        st.session_state.pdf_original_size = None
-    if 'pdf_optimized_size' not in st.session_state:
-        st.session_state.pdf_optimized_size = None
-    if 'pdf_processing_done' not in st.session_state:
-        st.session_state.pdf_processing_done = False
-    if 'pdf_last_uploaded_file_id' not in st.session_state:
-        st.session_state.pdf_last_uploaded_file_id = None
-
-    # Adicionar opções de otimização
-    st.subheader("Opções de Otimização")
-    col1, col2 = st.columns(2)
-    with col1:
-        image_quality = st.slider("Qualidade da Imagem (menor = mais compressão)", 
-                                 min_value=30, max_value=95, value=75, step=5,
-                                 help="Valores mais baixos resultam em ficheiros menores, mas com menor qualidade visual")
-    with col2:
-        grayscale = st.checkbox("Converter para escala de cinza", 
-                               value=False,
-                               help="Converte todas as imagens para escala de cinza para maior redução de tamanho")
-
-    uploaded_file = st.file_uploader(
-        "Escolhe um ficheiro PDF", 
-        type="pdf",
-        key="pdf_uploader"  # Chave única para este uploader
-    )
-
-    # Lógica para resetar o estado do PDF quando um NOVO ficheiro é carregado
-    if uploaded_file is not None:
-        current_file_id = uploaded_file.file_id
-        if current_file_id != st.session_state.pdf_last_uploaded_file_id:
-            st.session_state.pdf_last_uploaded_file_id = current_file_id
-            st.session_state.pdf_processing_done = False
-            st.session_state.pdf_processed_data = None
-            st.session_state.pdf_original_size = None
-            st.session_state.pdf_optimized_size = None
-
-    if uploaded_file is not None and not st.session_state.pdf_processing_done:
-        if st.button("Processar PDF"):
-            st.write("Ficheiro carregado com sucesso! A processar...")
+def reduce_pdf_size(input_file, output_path=None):
+    try:
+        # Se não for especificado um caminho de saída, criar um baseado no original
+        if output_path is None:
+            file_name = os.path.basename(input_file.name)
+            base_name, ext = os.path.splitext(file_name)
+            output_path = f"{base_name}_reduced{ext}"
+        
+        # Ler o arquivo de entrada
+        pdf_data = input_file.read()
+        
+        # Abrir o documento com PyMuPDF
+        doc = fitz.open(stream=pdf_data, filetype="pdf")
+        
+        # Aplicar compressão a cada página
+        for page in doc:
+            # Limpar conteúdo redundante
+            page.clean_contents()
             
-            # Ler o ficheiro PDF em memória
-            input_pdf_bytes = uploaded_file.read()
-            st.session_state.pdf_original_size = len(input_pdf_bytes)
-            
-            try:
-                # Abrir o documento PDF a partir dos bytes em memória
-                doc = fitz.open(stream=input_pdf_bytes, filetype="pdf")
-                
-                # Otimizar o documento usando o método optimize()
-                # Este é o método correto para recompressão de imagens
-                doc.optimize(
-                    # Remover objetos não utilizados
-                    prune=True,
-                    # Compressão de objetos (deflate)
-                    object_compress=True,
-                    # Compressão JPEG para imagens
-                    image_compress=fitz.PDF_IMAGE_COMPRESS_JPEG,
-                    # Qualidade JPEG (0-100)
-                    image_quality=image_quality,
-                    # Converter para escala de cinza se selecionado
-                    set_to_gray=grayscale
-                )
-                
-                # Aplicar subsetting de fontes (reduz tamanho de fontes incorporadas)
-                doc.subset_fonts()
-                
-                # Remover metadados e outros "pesos mortos"
-                doc.scrub(
-                    metadata=True,       # Limpa metadados básicos
-                    xml_metadata=True,   # Remove metadados XML
-                    thumbnails=True,     # Remove miniaturas de páginas
-                    attachments=True     # Remove anexos
-                )
-                
-                # Criar um buffer de saída para o PDF otimizado
-                output_pdf_buffer = io.BytesIO()
-                
-                # Salvar com opções de otimização adicionais
-                # garbage=4: nível máximo de coleta de lixo
-                # deflate=True: compressão zlib para streams
-                doc.save(output_pdf_buffer, 
-                         garbage=4, 
-                         deflate=True)
-                
-                doc.close()  # Fechar o documento PyMuPDF
-                
-                output_pdf_buffer.seek(0)  # Voltar ao início do buffer
-
-                st.session_state.pdf_processed_data = output_pdf_buffer.getvalue()
-                st.session_state.pdf_optimized_size = len(st.session_state.pdf_processed_data)
-                st.session_state.pdf_processing_done = True
-                st.success("PDF processado com sucesso!")
-
-            except Exception as e:
-                st.error(f"Ocorreu um erro ao processar o PDF: {e}")
-                st.session_state.pdf_processing_done = False  # Resetar para permitir nova tentativa
-                st.session_state.pdf_processed_data = None
-                st.session_state.pdf_original_size = None
-                st.session_state.pdf_optimized_size = None
-    
-    # Exibir resultados e botão de download se o processamento estiver concluído
-    if st.session_state.pdf_processing_done:
-        st.download_button(
-            label="Descarregar PDF Reduzido",
-            data=st.session_state.pdf_processed_data,
-            file_name="pdf_reduzido.pdf",
-            mime="application/pdf"
-        )
+            # Comprimir imagens na página
+            xref = page.get_images(full=True)
+            for img in xref:
+                xref_obj = img[0]
+                try:
+                    # Tentar comprimir a imagem se possível
+                    pix = fitz.Pixmap(doc, xref_obj)
+                    if pix.colorspace and pix.colorspace.n >= 3:  # Se for colorida
+                        if pix.alpha:  # Se tiver canal alpha
+                            pix = fitz.Pixmap(fitz.csRGB, pix)
+                        # Reduzir a qualidade da imagem
+                        pix = fitz.Pixmap(pix, 0.5)  # Reduz para 50% da qualidade
+                        doc.update_stream(xref_obj, pix.tobytes())
+                except Exception:
+                    pass  # Ignorar erros em imagens específicas
         
-        original_mb = st.session_state.pdf_original_size / (1024*1024)
-        optimized_mb = st.session_state.pdf_optimized_size / (1024*1024)
+        # Salvar com opções de compressão
+        doc.save(output_path, garbage=4, deflate=True, clean=True)
+        doc.close()
         
-        st.info(f"Tamanho original: {original_mb:.2f} MB")
-        st.info(f"Tamanho otimizado: {optimized_mb:.2f} MB")
+        # Obter tamanhos para comparação
+        original_size = len(pdf_data)
+        with open(output_path, "rb") as f:
+            reduced_size = len(f.read())
         
-        # Calcular e exibir a percentagem de redução
-        if st.session_state.pdf_original_size > 0:
-            reduction_percentage = ((st.session_state.pdf_original_size - st.session_state.pdf_optimized_size) / st.session_state.pdf_original_size) * 100
-            st.success(f"Redução de tamanho: {reduction_percentage:.2f}%")
-        else:
-            st.warning("Não foi possível calcular a percentagem de redução (tamanho original é zero).")
-
-    elif uploaded_file is None:
-        st.info("Por favor, carrega um ficheiro PDF para começar.")
+        reduction_percentage = ((original_size - reduced_size) / original_size) * 100
+        
+        return {
+            "success": True,
+            "output_path": output_path,
+            "original_size": original_size,
+            "reduced_size": reduced_size,
+            "reduction_percentage": reduction_percentage
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e)
+        }
 
 
 # --- Lógica Principal da Aplicação (Usando Abas) ---
