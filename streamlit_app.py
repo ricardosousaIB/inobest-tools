@@ -197,16 +197,11 @@ def excel_aggregator_app():
     elif uploaded_zip_file is None: # Mensagem inicial se nenhum ficheiro foi carregado
         st.info("A aguardar o carregamento de um ficheiro ZIP contendo os ficheiros Excel...")
 
-# --- Função para o Redutor de PDF ---
-def excel_aggregator_app():
-    # ... (todo o seu código do agregador de Excel) ...
-    pass # Apenas para placeholder, o seu código real estará aqui
-
 # --- Função para o Redutor de PDF (COM A CORREÇÃO DO ARGUMENTO 'compress') ---
 def pdf_reducer_app():
     st.header("Redutor de Ficheiros PDF")
     st.write("Carrega um ficheiro PDF para otimizá-lo e reduzir o seu tamanho. O processo é feito inteiramente na memória RAM.")
-    st.write("Esta ferramenta usa PyMuPDF para recompressão de imagens e otimização de conteúdo, com opções mais agressivas.")
+    st.write("Esta ferramenta usa PyMuPDF para otimização de conteúdo geral.")
 
     # Inicializa o session_state para o redutor de PDF
     if 'pdf_processed_data' not in st.session_state:
@@ -256,18 +251,14 @@ def pdf_reducer_app():
             # Abrir o documento PDF a partir dos bytes em memória
             doc = fitz.open(stream=input_pdf_bytes, filetype="pdf")
             
-            # --- OPÇÕES DE OTIMIZAÇÃO MAIS AGRESSIVAS (SEM O ARGUMENTO 'compress') ---
+            # --- OPÇÕES DE OTIMIZAÇÃO GERAIS (SEM ARGUMENTOS DE IMAGEM DIRETOS) ---
+            # Estas opções focam-se na limpeza e compressão de streams,
+            # mas não na recompressão de imagens com qualidade/downsampling.
             opts = dict(
-                deflate=True,
-                clean=True,
-                garbage=4,
-                linear=True,
-                # REMOVIDO: compress=True, # Este argumento não é válido para doc.save()
-                # Otimização de imagem:
-                img=dict(
-                    quality=75, # Qualidade JPEG das imagens (0-100)
-                    ratio=1     # Fator de downsampling (1 = sem downsampling)
-                )
+                deflate=True, # Compressão de streams
+                clean=True,   # Remove objetos não utilizados
+                garbage=4,    # Nível de limpeza agressivo
+                linear=True   # Otimiza para visualização web (fast web view)
             )
             
             # Criar um buffer de saída para o PDF otimizado
