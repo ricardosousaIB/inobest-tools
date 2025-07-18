@@ -201,7 +201,7 @@ def excel_aggregator_app():
 def pdf_reducer_app():
     st.header("Redutor de Ficheiros PDF")
     st.write("Carrega um ficheiro PDF para otimizá-lo e reduzir o seu tamanho. O processo é feito inteiramente na memória RAM.")
-    st.write("Esta ferramenta usa PyMuPDF para otimização de conteúdo geral.")
+    st.write("Esta ferramenta usa PyMuPDF para recompressão de imagens e otimização de conteúdo.")
 
     # Inicializa o session_state para o redutor de PDF
     if 'pdf_processed_data' not in st.session_state:
@@ -251,17 +251,34 @@ def pdf_reducer_app():
             # Abrir o documento PDF a partir dos bytes em memória
             doc = fitz.open(stream=input_pdf_bytes, filetype="pdf")
             
-            # --- OPÇÕES DE OTIMIZAÇÃO GERAIS (SEM ARGUMENTOS DE IMAGEM DIRETOS E SEM 'linear') ---
-            opts = dict(
-                deflate=True, # Compressão de streams
-                clean=True,   # Remove objetos não utilizados
-                garbage=4     # Nível de limpeza agressivo
-                # REMOVIDO: linear=True # Este argumento não é mais suportado diretamente
+            # --- OTIMIZAÇÃO REAL COM doc.optimize() ---
+            # Este método é o que faz a recompressão de imagens e limpeza profunda.
+            # 'prune': remove objetos não utilizados (similar a garbage=4)
+            # 'object_compress': nível de compressão para objetos (0=nenhum, 1=deflate, 2=lzw, 3=rle)
+            # 'image_compress': nível de compressão para imagens (0=nenhum, 1=deflate, 2=lzw, 3=rle, 4=jpeg)
+            # 'image_quality': qualidade JPEG para imagens (0-100, apenas se image_compress=4)
+            
+            # Para uma redução significativa, vamos usar compressão JPEG para imagens
+            # e um nível de qualidade razoável.
+            
+            # doc.optimize() reescreve o documento internamente.
+            # Não precisamos de passar opções para doc.save() depois disso,
+            # a menos que queiramos um output linearizado (fast web view),
+            # mas isso não afeta o tamanho.
+            
+            # Otimiza o documento. Isto reescreve o PDF em memória com compressão.
+            # Ajusta image_quality (0-100) para controlar a redução vs. qualidade visual.
+            # 75 é um bom ponto de partida.
+            doc.optimize(
+                prune=fitz.PDF_PRUNE_ALL, # Remove todos os objetos não utilizados
+                object_compress=fitz.PDF_OBJ_COMPRESS_DEFLATE, # Compressão deflate para objetos
+                image_compress=fitz.PDF_IMAGE_COMPRESS_JPEG, # Compressão JPEG para imagens
+                image_quality=75 # Qualidade JPEG (0-100)
             )
             
             # Criar um buffer de saída para o PDF otimizado
             output_pdf_buffer = io.BytesIO()
-            doc.save(output_pdf_buffer, **opts) # Passa as opções de otimização
+            doc.save(output_pdf_buffer) # Apenas salva o documento otimizado
             doc.close() # Fechar o documento PyMuPDF
             
             output_pdf_buffer.seek(0) # Voltar ao início do buffer
