@@ -5,8 +5,8 @@ services:
     build:
       context: . # O contexto de construção é o diretório atual (onde o Dockerfile está no repositório clonado)
       dockerfile: Dockerfile # O nome do seu Dockerfile
-    image: ricardosousaib/agregador-excel:latest # Este nome é para TAGGEAR a imagem construída localmente
-    container_name: agregador-excel-app
+    image: ricardosousaib/inobest-tools:latest # Este nome é para TAGGEAR a imagem construída localmente
+    container_name: inobest-tools-app
     ports:
       - "8501:8501"
     restart: unless-stopped
