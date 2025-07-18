@@ -4,6 +4,7 @@ import os
 from io import BytesIO, StringIO # <--- Esta linha já importa BytesIO e StringIO do módulo io
 import zipfile
 import csv
+import fitz
 from PyPDF2 import PdfReader, PdfWriter
 import io # <--- ADICIONA ESTA LINHA SE AINDA NÃO ESTIVER LÁ, OU SE ESTIVER, GARANTE QUE ESTÁ NO TOPO
 
