@@ -201,7 +201,7 @@ def excel_aggregator_app():
 def pdf_reducer_app():
     st.header("Redutor de Ficheiros PDF")
     st.write("Carrega um ficheiro PDF para otimizá-lo e reduzir o seu tamanho. O processo é feito inteiramente na memória RAM.")
-    st.write("Esta ferramenta usa PyMuPDF para recompressão de imagens e otimização de conteúdo.")
+    st.write("Esta ferramenta usa PyMuPDF para recompressão de imagens e otimização de conteúdo, com opções mais agressivas.")
 
     # Inicializa o session_state para o redutor de PDF
     if 'pdf_processed_data' not in st.session_state:
@@ -251,21 +251,54 @@ def pdf_reducer_app():
             # Abrir o documento PDF a partir dos bytes em memória
             doc = fitz.open(stream=input_pdf_bytes, filetype="pdf")
             
-            # Opções de otimização (ajusta conforme necessário)
-            # 'deflate' é a compressão padrão, 'clean' remove objetos não utilizados
-            # 'garbage=4' é um nível de limpeza agressivo
-            # 'linear' otimiza para visualização web (fast web view)
-            # 'compress=True' garante que os objetos são comprimidos
+            # --- OPÇÕES DE OTIMIZAÇÃO MAIS AGRESSIVAS ---
+            # Estas opções são passadas como um dicionário para o método save()
+            # 'deflate': compressão de stream (geralmente já é padrão)
+            # 'clean': remove objetos não utilizados
+            # 'garbage': nível de limpeza (4 é o mais agressivo)
+            # 'linear': otimiza para visualização web (fast web view)
+            # 'compress': força a compressão de objetos
+            # 'img': dicionário para otimização de imagens
+            #   'ratio': fator de downsampling (ex: 2 significa metade da resolução)
+            #   'quality': qualidade JPEG (0-100, 0 é pior, 100 é melhor)
+            #   'method': método de compressão (0=default, 1=lossy, 2=lossless)
             
-            # Para uma redução mais agressiva, podes tentar:
-            # doc.save(output_pdf_buffer, garbage=4, deflate=True, clean=True, linear=True)
+            # Para uma redução significativa, vamos focar na qualidade da imagem
+            # e downsampling se aplicável.
             
-            # Para um bom equilíbrio, vamos usar as opções padrão de save com otimização
-            # O método save() com 'garbage=4' e 'deflate=True' já faz uma boa otimização
+            # Exemplo de opções para otimização agressiva:
+            # Reduzir a qualidade das imagens para 75% e downsample (se a imagem for grande)
+            # O 'ratio' é um fator de downsampling. Se for 2, reduz a resolução pela metade.
+            # Se o PDF tiver muitas imagens de alta resolução, isto fará uma grande diferença.
+            
+            # Opções de otimização
+            # Ajusta 'img.quality' (0-100) e 'img.ratio' (fator de downsampling)
+            # para encontrar o equilíbrio entre tamanho e qualidade visual.
+            # Um 'quality' de 75-85 é geralmente um bom compromisso.
+            # Um 'ratio' de 2 pode reduzir a resolução pela metade.
+            
+            # Se o PDF tiver muitas imagens, esta é a chave para a redução.
+            # Se o PDF for principalmente texto, a redução será menor.
+            
+            opts = dict(
+                deflate=True,
+                clean=True,
+                garbage=4,
+                linear=True,
+                compress=True,
+                # Otimização de imagem:
+                # img.quality: 0 (pior) a 100 (melhor). 75 é um bom ponto de partida.
+                # img.ratio: Fator de downsampling. 1 = sem downsampling, 2 = metade da resolução, etc.
+                # Use img.ratio > 1 apenas se quiser reduzir a resolução das imagens.
+                img=dict(
+                    quality=75, # Qualidade JPEG das imagens (0-100)
+                    ratio=1     # Fator de downsampling (1 = sem downsampling)
+                )
+            )
             
             # Criar um buffer de saída para o PDF otimizado
             output_pdf_buffer = io.BytesIO()
-            doc.save(output_pdf_buffer, garbage=4, deflate=True, clean=True) # Otimização real aqui!
+            doc.save(output_pdf_buffer, **opts) # Passa as opções de otimização
             doc.close() # Fechar o documento PyMuPDF
             
             output_pdf_buffer.seek(0) # Voltar ao início do buffer
