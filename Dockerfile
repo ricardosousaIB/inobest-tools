@@ -3,16 +3,18 @@ FROM python:3.9-buster
 
 # Instala dependências de sistema para PyMuPDF
 # build-essential, libssl-dev, libffi-dev, python3-dev já devem estar na imagem buster
-# mas libjpeg-dev e zlib1g-dev são específicos para a compilação de imagens/compressão
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
+# libjpeg-dev e zlib1g-dev são para a compilação de imagens/compressão
+# Adicionamos --fix-missing para tentar resolver dependências quebradas
+# E um truque para invalidar o cache do Docker para esta linha
+ARG CACHE_BUST=1
+RUN apt-get update -y && \
+    apt-get install -y --no-install-recommends --fix-missing \
     libjpeg-dev \
     zlib1g-dev \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 # Instala PyMuPDF separadamente
-# Isso pode ajudar a isolar problemas de instalação específicos do PyMuPDF
 RUN pip install --no-cache-dir PyMuPDF
 
 # Define o diretório de trabalho dentro do container
