@@ -1,20 +1,17 @@
-# Usa uma imagem base Python oficial mais completa
-FROM python:3.9-buster
+# Usa uma imagem base Python oficial (mais genérica que slim-buster)
+FROM python:3.9-slim
 
-# Instala dependências de sistema para PyMuPDF
-# build-essential, libssl-dev, libffi-dev, python3-dev já devem estar na imagem buster
-# libjpeg-dev e zlib1g-dev são para a compilação de imagens/compressão
-# Adicionamos --fix-missing para tentar resolver dependências quebradas
-# E um truque para invalidar o cache do Docker para esta linha
-ARG CACHE_BUST=1
-RUN apt-get update -y && \
-    apt-get install -y --no-install-recommends --fix-missing \
-    libjpeg-dev \
+# Instala apenas as dependências de sistema ABSOLUTAMENTE mínimas para PyMuPDF
+# As rodas (wheels) do PyMuPDF geralmente não precisam de build-essential
+# mas podem precisar de libjpeg-dev e zlib1g-dev para funcionalidades de imagem/compressão
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    libjpeg62-turbo-dev \
     zlib1g-dev \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Instala PyMuPDF separadamente
+# Instala PyMuPDF separadamente (sempre bom para isolar)
 RUN pip install --no-cache-dir PyMuPDF
 
 # Define o diretório de trabalho dentro do container
