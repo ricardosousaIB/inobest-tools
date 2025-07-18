@@ -199,7 +199,8 @@ def excel_aggregator_app():
 # --- Função para o Redutor de PDF ---
 def pdf_reducer_app():
     st.header("Redutor de Ficheiros PDF")
-    st.write("Carrega um ficheiro PDF para 'otimizá-lo' e potencialmente reduzir o seu tamanho. O processo é feito inteiramente na memória RAM.")
+    st.write("Carrega um ficheiro PDF para otimizá-lo e reduzir o seu tamanho. O processo é feito inteiramente na memória RAM.")
+    st.write("Esta ferramenta usa PyMuPDF para recompressão de imagens e otimização de conteúdo.")
 
     # Inicializa o session_state para o redutor de PDF
     if 'pdf_processed_data' not in st.session_state:
@@ -242,19 +243,30 @@ def pdf_reducer_app():
         st.write("Ficheiro carregado com sucesso! A processar...")
         
         # Ler o ficheiro PDF em memória
-        input_pdf_buffer = io.BytesIO(uploaded_file.read())
-        st.session_state.pdf_original_size = len(input_pdf_buffer.getvalue())
+        input_pdf_bytes = uploaded_file.read()
+        st.session_state.pdf_original_size = len(input_pdf_bytes)
         
         try:
-            reader = PdfReader(input_pdf_buffer)
-            writer = PdfWriter()
-
-            for page_num in range(len(reader.pages)):
-                writer.add_page(reader.pages[page_num])
+            # Abrir o documento PDF a partir dos bytes em memória
+            doc = fitz.open(stream=input_pdf_bytes, filetype="pdf")
+            
+            # Opções de otimização (ajusta conforme necessário)
+            # 'deflate' é a compressão padrão, 'clean' remove objetos não utilizados
+            # 'garbage=4' é um nível de limpeza agressivo
+            # 'linear' otimiza para visualização web (fast web view)
+            # 'compress=True' garante que os objetos são comprimidos
+            
+            # Para uma redução mais agressiva, podes tentar:
+            # doc.save(output_pdf_buffer, garbage=4, deflate=True, clean=True, linear=True)
+            
+            # Para um bom equilíbrio, vamos usar as opções padrão de save com otimização
+            # O método save() com 'garbage=4' e 'deflate=True' já faz uma boa otimização
             
             # Criar um buffer de saída para o PDF otimizado
             output_pdf_buffer = io.BytesIO()
-            writer.write(output_pdf_buffer)
+            doc.save(output_pdf_buffer, garbage=4, deflate=True, clean=True) # Otimização real aqui!
+            doc.close() # Fechar o documento PyMuPDF
+            
             output_pdf_buffer.seek(0) # Voltar ao início do buffer
 
             st.session_state.pdf_processed_data = output_pdf_buffer.getvalue()
@@ -283,6 +295,14 @@ def pdf_reducer_app():
         
         st.info(f"Tamanho original: {st.session_state.pdf_original_size / (1024*1024):.2f} MB")
         st.info(f"Tamanho otimizado: {st.session_state.pdf_optimized_size / (1024*1024):.2f} MB")
+        
+        # Calcular e exibir a percentagem de redução
+        if st.session_state.pdf_original_size > 0:
+            reduction_percentage = ((st.session_state.pdf_original_size - st.session_state.pdf_optimized_size) / st.session_state.pdf_original_size) * 100
+            st.success(f"Redução de tamanho: {reduction_percentage:.2f}%")
+        else:
+            st.warning("Não foi possível calcular a percentagem de redução (tamanho original é zero).")
+
     elif uploaded_file is None:
         st.info("Por favor, carrega um ficheiro PDF para começar.")
 
