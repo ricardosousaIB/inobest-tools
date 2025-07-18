@@ -1,21 +1,24 @@
 # Usa uma imagem base Python oficial mais completa
 FROM python:3.9-buster
 
-# Instala dependências de sistema para PyMuPDF (e outras bibliotecas comuns)
-# A imagem 'buster' já deve ter muitas destas, mas vamos garantir as essenciais
+# Instala dependências de sistema para PyMuPDF
+# build-essential, libssl-dev, libffi-dev, python3-dev já devem estar na imagem buster
+# mas libjpeg-dev e zlib1g-dev são específicos para a compilação de imagens/compressão
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     libjpeg-dev \
     zlib1g-dev \
-    # build-essential, libssl-dev, libffi-dev, python3-dev já devem estar na imagem buster
-    # mas podemos deixá-los para garantir, ou remover se o build for bem-sucedido sem eles
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
+
+# Instala PyMuPDF separadamente
+# Isso pode ajudar a isolar problemas de instalação específicos do PyMuPDF
+RUN pip install --no-cache-dir PyMuPDF
 
 # Define o diretório de trabalho dentro do container
 WORKDIR /app
 
-# Copia o ficheiro de requisitos e instala as dependências
+# Copia o ficheiro de requisitos (agora SEM PyMuPDF) e instala as restantes dependências
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
