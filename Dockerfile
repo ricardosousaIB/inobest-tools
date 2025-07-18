@@ -1,21 +1,31 @@
-# Use uma imagem base Python oficial
+# Usa uma imagem base Python oficial
 FROM python:3.9-slim-buster
 
-# Define o diretório de trabalho dentro do contêiner
+# Instala dependências de sistema para PyMuPDF (e outras bibliotecas comuns)
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    libssl-dev \
+    libffi-dev \
+    python3-dev \
+    # Dependências específicas para MuPDF/fitz
+    libopenjp2-7 \
+    libjpeg-dev \
+    zlib1g-dev \
+    # Limpeza
+    && rm -rf /var/lib/apt/lists/*
+
+# Define o diretório de trabalho dentro do container
 WORKDIR /app
 
 # Copia o ficheiro de requisitos e instala as dependências
-# Usamos COPY --chown para garantir que o utilizador 'appuser' (se criado) tenha permissões
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copia o restante do código da aplicação para o diretório de trabalho
-# O '.' no final significa copiar tudo do diretório atual do host para /app no contêiner
+# Copia o resto do código da aplicação para o diretório de trabalho
 COPY . .
 
-# Expõe a porta padrão do Streamlit
+# Expõe a porta que o Streamlit usa (padrão é 8501)
 EXPOSE 8501
 
-# Comando para rodar a aplicação Streamlit
-# Certifique-se de que 'app.py' é o nome do seu ficheiro principal Streamlit
-CMD ["streamlit", "run", "streamlit_app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+# Comando para executar a aplicação Streamlit quando o container iniciar
+CMD ["streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0"]
