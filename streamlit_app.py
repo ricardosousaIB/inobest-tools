@@ -1,10 +1,11 @@
 import streamlit as st
 import pandas as pd
 import os
-from io import BytesIO, StringIO
+from io import BytesIO, StringIO # <--- Esta linha já importa BytesIO e StringIO do módulo io
 import zipfile
-import csv # Importar para usar QUOTING
-from PyPDF2 import PdfReader, PdfWriter # Importar para o redutor de PDF
+import csv
+from PyPDF2 import PdfReader, PdfWriter
+import io # <--- ADICIONA ESTA LINHA SE AINDA NÃO ESTIVER LÁ, OU SE ESTIVER, GARANTE QUE ESTÁ NO TOPO
 
 st.set_page_config(layout="wide", page_title="Ferramentas de Ficheiros")
 
