@@ -200,7 +200,7 @@ def excel_aggregator_app():
 
 
 # --- Lógica Principal da Aplicação (Usando Abas) ---
-tab1 = st.tabs(["Agregador de Excel"])
+tab1 = st.tabs(["Agregador de Excel"])[0] # existindo mais do que um, eliminar [0]
 
 with tab1:
     excel_aggregator_app()
