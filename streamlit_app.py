@@ -197,72 +197,10 @@ def excel_aggregator_app():
     elif uploaded_zip_file is None: # Mensagem inicial se nenhum ficheiro foi carregado
         st.info("A aguardar o carregamento de um ficheiro ZIP contendo os ficheiros Excel...")
 
-# --- Função para o Redutor de PDF (COM A CORREÇÃO DO ARGUMENTO 'compress') ---
-def reduce_pdf_size(input_file, output_path=None):
-    try:
-        # Se não for especificado um caminho de saída, criar um baseado no original
-        if output_path is None:
-            file_name = os.path.basename(input_file.name)
-            base_name, ext = os.path.splitext(file_name)
-            output_path = f"{base_name}_reduced{ext}"
-        
-        # Ler o arquivo de entrada
-        pdf_data = input_file.read()
-        
-        # Abrir o documento com PyMuPDF
-        doc = fitz.open(stream=pdf_data, filetype="pdf")
-        
-        # Aplicar compressão a cada página
-        for page in doc:
-            # Limpar conteúdo redundante
-            page.clean_contents()
-            
-            # Comprimir imagens na página
-            xref = page.get_images(full=True)
-            for img in xref:
-                xref_obj = img[0]
-                try:
-                    # Tentar comprimir a imagem se possível
-                    pix = fitz.Pixmap(doc, xref_obj)
-                    if pix.colorspace and pix.colorspace.n >= 3:  # Se for colorida
-                        if pix.alpha:  # Se tiver canal alpha
-                            pix = fitz.Pixmap(fitz.csRGB, pix)
-                        # Reduzir a qualidade da imagem
-                        pix = fitz.Pixmap(pix, 0.5)  # Reduz para 50% da qualidade
-                        doc.update_stream(xref_obj, pix.tobytes())
-                except Exception:
-                    pass  # Ignorar erros em imagens específicas
-        
-        # Salvar com opções de compressão
-        doc.save(output_path, garbage=4, deflate=True, clean=True)
-        doc.close()
-        
-        # Obter tamanhos para comparação
-        original_size = len(pdf_data)
-        with open(output_path, "rb") as f:
-            reduced_size = len(f.read())
-        
-        reduction_percentage = ((original_size - reduced_size) / original_size) * 100
-        
-        return {
-            "success": True,
-            "output_path": output_path,
-            "original_size": original_size,
-            "reduced_size": reduced_size,
-            "reduction_percentage": reduction_percentage
-        }
-    except Exception as e:
-        return {
-            "success": False,
-            "error": str(e)
-        }
 
 
 # --- Lógica Principal da Aplicação (Usando Abas) ---
-tab1, tab2 = st.tabs(["Agregador de Excel", "Redutor de PDF"])
+tab1 = st.tabs(["Agregador de Excel")
 
 with tab1:
     excel_aggregator_app()
-
-with tab2:
-    pdf_reducer_app()
