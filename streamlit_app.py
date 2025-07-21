@@ -200,7 +200,7 @@ def excel_aggregator_app():
 
 
 # --- Lógica Principal da Aplicação (Usando Abas) ---
-tab1 = st.tabs(["Agregador de Excel")]
+tab1 = st.tabs(["Agregador de Excel"])
 
 with tab1:
     excel_aggregator_app()
