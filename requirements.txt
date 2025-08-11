@@ -1,6 +1,5 @@
 streamlit
 pandas
-openpyxl
-xlsxwriter
-PyPDF2
-PyMuPDF
+zipfile
+ET
+typing
