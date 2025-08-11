@@ -343,7 +343,7 @@ def parse_saft_xml_bytes(xml_bytes: bytes) -> Tuple[str, str, str]:
 
 
 def saf_t_tab():
-    st.header("SAF-T → CSV (in-memory)")
+    st.header("SAF-T Faturação → CSV")
     uploaded = st.file_uploader("Escolha um ficheiro .xml ou um .zip contendo .xml", type=["xml", "zip"])
     if uploaded is None:
         st.info("Faça upload de um ficheiro SAF-T (.xml) ou um .zip que contenha um .xml.")
