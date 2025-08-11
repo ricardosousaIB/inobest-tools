@@ -402,7 +402,7 @@ def saf_t_tab():
 
 
 # --- Lógica Principal da Aplicação (Usando Abas) ---
-tab1, tab2 = st.tabs(["Agregador de Excel", "SAF-T → CSV"])
+tab1, tab2 = st.tabs(["Agregador de Excel", "SAF-T Faturação → CSV"])
 with tab1:
     excel_aggregator_app()
 with tab2:
