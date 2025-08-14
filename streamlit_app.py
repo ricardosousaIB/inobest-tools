@@ -3,7 +3,7 @@ import io, zipfile, re, csv, os, time, requests, base64, hashlib, secrets, json
 from urllib.parse import urlencode
 import xml.etree.ElementTree as ET
 import pandas as pd
-from typing import Tuple, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from io import BytesIO
 
 def _o365_get_setting(key: str) -> str:
