@@ -400,10 +400,327 @@ def saf_t_tab():
             mime="application/zip"
         )
 
+# ======= OrangeHRM Pivot Tab (auto-contido) =======
+import os
+import time
+from io import BytesIO
+from typing import List, Dict, Any
+
+import pandas as pd
+import requests
+import streamlit as st
+
+def _get_setting(key: str, default: str = "") -> str:
+    # Lê ORANGEHRM_* do ambiente; fallback para st.secrets['orangehrm'][key]
+    env_key = f"ORANGEHRM_{key.upper()}"
+    v = os.getenv(env_key)
+    if v:
+        return v
+    try:
+        return st.secrets["orangehrm"].get(key, default)
+    except Exception:
+        return default
+
+# Cliente com refresh automático
+class _OrangeHRMClient:
+    def __init__(self, client_id: str, refresh_token: str, token_url: str, api_base: str):
+        self.client_id = client_id
+        self.token_url = token_url
+        self.api_base = api_base
+
+        if "orange_access_token" not in st.session_state:
+            st.session_state["orange_access_token"] = ""
+        if "orange_expires_at" not in st.session_state:
+            st.session_state["orange_expires_at"] = 0.0
+        if "orange_refresh_token" not in st.session_state:
+            st.session_state["orange_refresh_token"] = refresh_token
+
+    @property
+    def access_token(self) -> str:
+        return st.session_state["orange_access_token"]
+
+    @property
+    def refresh_token(self) -> str:
+        return st.session_state["orange_refresh_token"]
+
+    @property
+    def expires_at(self) -> float:
+        return st.session_state["orange_expires_at"]
+
+    def _save_tokens(self, token_resp: dict):
+        st.session_state["orange_access_token"] = token_resp["access_token"]
+        if "refresh_token" in token_resp and token_resp["refresh_token"]:
+            st.session_state["orange_refresh_token"] = token_resp["refresh_token"]
+        expires_in = int(token_resp.get("expires_in", 3600))
+        st.session_state["orange_expires_at"] = time.time() + max(expires_in - 60, 0)
+
+    def _needs_refresh(self) -> bool:
+        return (not self.access_token) or time.time() >= self.expires_at
+
+    def _refresh(self) -> bool:
+        if not self.refresh_token:
+            return False
+        data = {
+            "grant_type": "refresh_token",
+            "client_id": self.client_id,
+            "refresh_token": self.refresh_token,
+        }
+        r = requests.post(self.token_url, data=data, timeout=30)
+        if r.ok:
+            self._save_tokens(r.json())
+            return True
+        else:
+            st.warning(f"Falha ao renovar token ({r.status_code}): {r.text}")
+            return False
+
+    def _ensure_token(self):
+        if self._needs_refresh():
+            ok = self._refresh()
+            if not ok:
+                raise RuntimeError("Não foi possível obter token de acesso (refresh falhou).")
+
+    def request(self, method: str, path: str, retry_on_401: bool = True, **kwargs):
+        self._ensure_token()
+        url = path if path.startswith("http") else self.api_base + path.lstrip("/")
+        headers = kwargs.pop("headers", {})
+        headers = {"Authorization": f"Bearer {self.access_token}", **headers}
+        resp = requests.request(method, url, headers=headers, timeout=60, **kwargs)
+        if resp.status_code == 401 and retry_on_401:
+            if self._refresh():
+                headers["Authorization"] = f"Bearer {self.access_token}"
+                resp = requests.request(method, url, headers=headers, timeout=60, **kwargs)
+        resp.raise_for_status()
+        ctype = resp.headers.get("Content-Type", "")
+        return resp.json() if "application/json" in ctype else resp.text
+
+# Endpoints
+_PATH_LIST_EMPLOYEE_TIMESHEETS = "time/employees/{empNumber}/timesheets"
+_PATH_GET_TIMESHEET_ENTRIES    = "time/employees/timesheets/{timesheetId}/entries"
+
+# Funções de dados
+def _list_all_employees(client: _OrangeHRMClient, limit: int = 200) -> List[Dict[str, Any]]:
+    results, offset = [], 0
+    while True:
+        params = {"limit": limit, "offset": offset}
+        data = client.request("GET", "pim/employees", params=params)
+        rows = []
+        if isinstance(data, dict) and "data" in data and isinstance(data["data"], list):
+            rows = data["data"]
+        elif isinstance(data, list):
+            rows = data
+        else:
+            break
+        results.extend(rows)
+        if len(rows) < limit:
+            break
+        offset += limit
+    return results
+
+def _full_name_from_employee_row(e: Dict[str, Any]) -> str:
+    first  = (e.get("firstName")  or "").strip()
+    middle = (e.get("middleName") or "").strip()
+    last   = (e.get("lastName")   or "").strip()
+    parts = [p for p in [first, middle, last] if p]
+    if parts:
+        return " ".join(parts)
+    if isinstance(e.get("name"), str) and e["name"].strip():
+        return e["name"].strip()
+    return str(e.get("empNumber") or e.get("employeeNumber") or e.get("code") or "")
+
+def _build_empnumber_to_name_map(employees: List[Dict[str, Any]]) -> Dict[str, str]:
+    mapping = {}
+    for e in employees:
+        emp_no = e.get("empNumber") or e.get("employeeNumber") or e.get("code")
+        if emp_no is not None:
+            mapping[str(emp_no)] = _full_name_from_employee_row(e)
+    return mapping
+
+def _list_employee_timesheets(client: _OrangeHRMClient, emp_number: str, from_date: str = None, to_date: str = None, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
+    path = _PATH_LIST_EMPLOYEE_TIMESHEETS.format(empNumber=emp_number)
+    params = {"limit": limit, "offset": offset}
+    if from_date: params["fromDate"] = from_date
+    if to_date:   params["toDate"]   = to_date
+    data = client.request("GET", path, params=params)
+    if isinstance(data, dict) and "data" in data: return data["data"]
+    if isinstance(data, list): return data
+    return []
+
+def _get_timesheet_entries(client: _OrangeHRMClient, timesheet_id: str) -> List[Dict[str, Any]]:
+    path = _PATH_GET_TIMESHEET_ENTRIES.format(timesheetId=timesheet_id)
+    data = client.request("GET", path)
+    if isinstance(data, dict) and "data" in data: return data["data"]
+    if isinstance(data, list): return data
+    return []
+
+def _sum_timesheet_hours(entries: List[Dict[str, Any]]) -> float:
+    total_hours = 0.0
+    for e in entries:
+        t = e.get("total", {})
+        h = t.get("hours")
+        m = t.get("minutes")
+        if isinstance(h, (int, float)):
+            add = float(h)
+            if isinstance(m, (int, float)) and m:
+                add += float(m) / 60.0
+            total_hours += add
+            continue
+        dates = e.get("dates", {})
+        for _, d in dates.items():
+            dur = d.get("duration")
+            if isinstance(dur, str) and ":" in dur:
+                hh, mm = dur.split(":", 1)
+                try:
+                    total_hours += int(hh) + int(mm) / 60.0
+                except:
+                    pass
+            elif isinstance(dur, (int, float)):
+                total_hours += float(dur)
+    return round(total_hours, 2)
+
+def _get_totals_by_employee_and_timesheet(client: _OrangeHRMClient, emp_numbers: List[str], empname_map: Dict[str, str], from_date: str = None, to_date: str = None) -> List[Dict[str, Any]]:
+    rows = []
+    for emp in emp_numbers:
+        offset = 0
+        while True:
+            sheets = _list_employee_timesheets(client, emp, from_date=from_date, to_date=to_date, limit=50, offset=offset)
+            if not sheets:
+                break
+            for ts in sheets:
+                ts_id = str(ts.get("id") or ts.get("timesheetId"))
+                period_start = ts.get("startDate") or ts.get("fromDate")
+                period_end = ts.get("endDate") or ts.get("toDate")
+                if not ts_id:
+                    continue
+                entries = _get_timesheet_entries(client, ts_id)
+                total_hours = _sum_timesheet_hours(entries)
+                rows.append({
+                    "empNumber": emp,
+                    "empName": empname_map.get(str(emp), str(emp)),
+                    "timesheetId": ts_id,
+                    "periodStart": period_start,
+                    "periodEnd": period_end,
+                    "totalHours": total_hours
+                })
+            if len(sheets) < 50:
+                break
+            offset += 50
+    return rows
+
+def _pivot_hours_by_employee_and_start(rows: List[Dict[str, Any]]) -> pd.DataFrame:
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows)
+    index_col = "empName" if "empName" in df.columns else "empNumber"
+    pivot = pd.pivot_table(
+        df,
+        index=index_col,
+        columns="periodStart",
+        values="totalHours",
+        aggfunc="sum",
+        fill_value=0.0,
+    )
+    try:
+        ordered_cols = sorted(pivot.columns, key=pd.to_datetime)
+        pivot = pivot[ordered_cols]
+    except Exception:
+        pass
+    return pivot.sort_index()
+
+# Cache sem fechar sobre objetos não-hasháveis
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_employees_and_map(domain: str, client_id: str, refresh_token: str):
+    api_base = domain.rstrip("/") + "/api/v2/"
+    token_url = domain.rstrip("/") + "/oauth2/token"
+    client = _OrangeHRMClient(client_id, refresh_token, token_url, api_base)
+    emps = _list_all_employees(client, limit=200)
+    emp_map = _build_empnumber_to_name_map(emps)
+    emp_numbers = list(emp_map.keys())
+    return emps, emp_map, emp_numbers
+
+def render_orangehrm_pivot_tab():
+    # Lê configs
+    domain = _get_setting("domain") or "https://rh.inobest.com/web/index.php/"
+    client_id = _get_setting("client_id") or ""
+    refresh_token = _get_setting("refresh_token") or ""
+
+    if not client_id or not refresh_token:
+        st.error("Credenciais em falta. Defina ORANGEHRM_CLIENT_ID e ORANGEHRM_REFRESH_TOKEN no ambiente (stack.env) ou em st.secrets['orangehrm'].")
+        return
+
+    api_base = domain.rstrip("/") + "/api/v2/"
+    token_url = domain.rstrip("/") + "/oauth2/token"
+    client = _OrangeHRMClient(client_id, refresh_token, token_url, api_base)
+
+    st.header("Timesheets - Pivot por Funcionário")
+    with st.sidebar:
+        st.caption("Parâmetros da aba: Timesheets Pivot")
+        from_date = st.date_input("De (início do período)", None, format="YYYY-MM-DD", key="ts_from_date")
+        to_date   = st.date_input("Até (fim do período)", None, format="YYYY-MM-DD", key="ts_to_date")
+        from_date_str = from_date.isoformat() if from_date else None
+        to_date_str   = to_date.isoformat() if to_date else None
+        run_btn = st.button("Gerar Pivot", key="run_pivot_btn")
+
+    with st.spinner("Carregando colaboradores..."):
+        employees, emp_map, all_emp_numbers = _cached_employees_and_map(domain, client_id, refresh_token)
+
+    emp_display = {k: emp_map.get(k, k) for k in all_emp_numbers}
+    emp_choices = st.multiselect(
+        "Filtrar colaboradores (opcional)",
+        options=all_emp_numbers,
+        default=all_emp_numbers[: min(len(all_emp_numbers), 20)],
+        format_func=lambda k: emp_display.get(k, k),
+        key="emp_filter_multiselect",
+    )
+
+    if run_btn:
+        if not emp_choices:
+            st.warning("Selecione pelo menos um colaborador.")
+            return
+
+        with st.spinner("Buscando timesheets e calculando totais..."):
+            rows = _get_totals_by_employee_and_timesheet(
+                client,
+                emp_choices,
+                emp_map,
+                from_date=from_date_str,
+                to_date=to_date_str,
+            )
+            pivot_df = _pivot_hours_by_employee_and_start(rows)
+
+        st.subheader("Pivot - Horas por Funcionário x Data de Início do Timesheet")
+        if pivot_df.empty:
+            st.info("Nenhum dado encontrado para os filtros selecionados.")
+        else:
+            st.dataframe(pivot_df, use_container_width=True)
+
+            csv_bytes = pivot_df.to_csv(index=True).encode("utf-8")
+            st.download_button(
+                "Baixar CSV",
+                data=csv_bytes,
+                file_name="timesheet_pivot.csv",
+                mime="text/csv",
+                key="dl_csv_button",
+            )
+
+            xlsx_buffer = BytesIO()
+            with pd.ExcelWriter(xlsx_buffer, engine="openpyxl") as writer:
+                pivot_df.to_excel(writer, sheet_name="Pivot", index=True)
+                pd.DataFrame(rows).to_excel(writer, sheet_name="Dados", index=False)
+            st.download_button(
+                "Baixar Excel",
+                data=xlsx_buffer.getvalue(),
+                file_name="timesheet_pivot.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="dl_xlsx_button",
+            )
+# ======= Fim do bloco OrangeHRM Pivot Tab =======
+
 
 # --- Lógica Principal da Aplicação (Usando Abas) ---
-tab1, tab2 = st.tabs(["Agregador de Excel", "SAF-T Faturação → CSV"])
+tab1, tab2, tab3 = st.tabs(["Agregador de Excel", "SAF-T Faturação → CSV", "Timesheets Pivot"])
 with tab1:
     excel_aggregator_app()
 with tab2:
     saf_t_tab()
+with tab3:
+    render_orangehrm_pivot_tab()
