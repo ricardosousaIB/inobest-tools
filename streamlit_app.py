@@ -649,6 +649,105 @@ def _cached_employees_and_map(domain: str, client_id: str, refresh_token: str):
     emp_numbers = list(emp_map.keys())
     return emps, emp_map, emp_numbers
 
+def _sum_entry_hours(entry: Dict[str, Any]) -> float:
+    # Soma horas de uma entrada, suportando tanto 'total' (hours/minutes) como 'dates' com 'HH:MM'
+    t = entry.get("total", {})
+    h = t.get("hours")
+    m = t.get("minutes")
+    if isinstance(h, (int, float)):
+        add = float(h)
+        if isinstance(m, (int, float)) and m:
+            add += float(m) / 60.0
+        return add
+
+    total = 0.0
+    dates = entry.get("dates", {})
+    for _day, d in dates.items():
+        dur = d.get("duration")
+        if isinstance(dur, str) and ":" in dur:
+            try:
+                hh, mm = dur.split(":", 1)
+                total += int(hh) + int(mm) / 60.0
+            except:
+                pass
+        elif isinstance(dur, (int, float)):
+            total += float(dur)
+    return total
+
+
+def _get_hours_by_employee_and_project(
+    client: "_OrangeHRMClient",
+    emp_numbers: List[str],
+    empname_map: Dict[str, str],
+    from_date: str = None,
+    to_date: str = None,
+) -> List[Dict[str, Any]]:
+    """
+    Devolve linhas agregadas por colaborador × projeto.
+    Cada linha: { empNumber, empName, projectId, projectName, totalHours }
+    """
+    acc: Dict[tuple, float] = {}
+    for emp in emp_numbers:
+        offset = 0
+        while True:
+            sheets = _list_employee_timesheets(client, emp, from_date=from_date, to_date=to_date, limit=50, offset=offset)
+            if not sheets:
+                break
+            for ts in sheets:
+                ts_id = str(ts.get("id") or ts.get("timesheetId"))
+                if not ts_id:
+                    continue
+                entries = _get_timesheet_entries(client, ts_id)
+                for e in entries:
+                    hours = _sum_entry_hours(e)
+                    # Extrair projeto de forma robusta
+                    proj = e.get("project") if isinstance(e.get("project"), dict) else {}
+                    project_id = proj.get("id") or e.get("projectId") or e.get("project_id")
+                    project_name = (
+                        proj.get("name")
+                        or e.get("projectName")
+                        or e.get("project_name")
+                        or "Sem Projeto"
+                    )
+                    key = (str(emp), str(project_id) if project_id is not None else project_name)
+                    acc[key] = acc.get(key, 0.0) + hours
+            if len(sheets) < 50:
+                break
+            offset += 50
+
+    rows: List[Dict[str, Any]] = []
+    for (emp_key, proj_key), total in acc.items():
+        rows.append({
+            "empNumber": emp_key,
+            "empName": empname_map.get(emp_key, emp_key),
+            "projectKey": proj_key,  # ID se existir, senão o nome
+            "projectName": str(proj_key),
+            "totalHours": round(total, 2),
+        })
+    return rows
+
+
+def _pivot_hours_by_employee_and_project(rows: List[Dict[str, Any]]) -> pd.DataFrame:
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows)
+    index_col = "empName" if "empName" in df.columns else "empNumber"
+    col_col = "projectName" if "projectName" in df.columns else "projectKey"
+    pivot = pd.pivot_table(
+        df,
+        index=index_col,
+        columns=col_col,
+        values="totalHours",
+        aggfunc="sum",
+        fill_value=0.0,
+    )
+    # Ordena alfabeticamente os projetos para leitura mais fácil
+    try:
+        pivot = pivot[sorted(pivot.columns, key=lambda x: (str(x).lower()))]
+    except Exception:
+        pass
+    return pivot.sort_index()
+
 def render_orangehrm_oauth_bootstrap_tab():
     st.header("Configuração OAuth (Admin) — Obter Refresh Token")
 
@@ -802,6 +901,48 @@ def render_orangehrm_pivot_tab():
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 key="dl_xlsx_button",
             )
+        # ——————————————————————————————————————————————
+        # Nova secção: Horas por Colaborador × Projeto
+        # ——————————————————————————————————————————————
+        st.subheader("Horas por Colaborador × Projeto")
+
+        with st.spinner("A obter entradas e a agregar por projeto..."):
+            proj_rows = _get_hours_by_employee_and_project(
+                client,
+                emp_choices,
+                emp_map,
+                from_date=from_date_str,
+                to_date=to_date_str,
+            )
+            proj_pivot_df = _pivot_hours_by_employee_and_project(proj_rows)
+
+        if proj_pivot_df.empty:
+            st.info("Não foram encontrados dados por projeto para os filtros selecionados.")
+        else:
+            st.dataframe(proj_pivot_df, use_container_width=True)
+
+            # Descarregar CSV (por projeto)
+            proj_csv = proj_pivot_df.to_csv(index=True).encode("utf-8")
+            st.download_button(
+                "Descarregar CSV (Colaborador × Projeto)",
+                data=proj_csv,
+                file_name="folhas_horas_por_projeto.csv",
+                mime="text/csv",
+                key="dl_csv_proj_button",
+            )
+
+        # Descarregar Excel (inclui Pivot Projeto e Dados Projeto)
+        proj_xlsx_buffer = BytesIO()
+        with pd.ExcelWriter(proj_xlsx_buffer, engine="openpyxl") as writer:
+            proj_pivot_df.to_excel(writer, sheet_name="Pivot_Projeto", index=True)
+            pd.DataFrame(proj_rows).to_excel(writer, sheet_name="Dados_Projeto", index=False)
+        st.download_button(
+            "Descarregar Excel (Colaborador × Projeto)",
+            data=proj_xlsx_buffer.getvalue(),
+            file_name="folhas_horas_por_projeto.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="dl_xlsx_proj_button",
+        )
 # ======= Fim do bloco OrangeHRM Pivot Tab =======
 
 
