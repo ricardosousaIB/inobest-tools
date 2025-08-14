@@ -959,10 +959,39 @@ def _get_hours_by_employee_client_project(
     return rows
 
 # Map O365 email -> OrangeHRM employee number
+def _email_to_username(email: str) -> str:
+    try:
+        local = (email or "").strip().split("@", 1)[0]
+        return local.strip().lower()
+    except Exception:
+        return ""
+
+def _try_map_by_admin_users(client: _OrangeHRMClient, username: str) -> Optional[str]:
+    """
+    Tenta mapear via endpoint admin/users?userName=<username>.
+    Requer permissões para /api/v2/admin/users. Extrai empNumber do objeto employee.
+    """
+    if not username:
+        return None
+    try:
+        data = client.request("GET", f"admin/users?limit=50&userName={username}")
+        arr = data.get("data") if isinstance(data, dict) else (data if isinstance(data, list) else [])
+        for u in arr:
+            emp = u.get("employee") if isinstance(u.get("employee"), dict) else {}
+            emp_no = emp.get("empNumber") or u.get("empNumber") or None
+            if emp_no:
+                return str(emp_no)
+    except Exception:
+        # Pode não ter permissões para admin/users; segue o fallback
+        pass
+    return None
+    
 def _map_email_to_empnumber(client: _OrangeHRMClient, email: str) -> Optional[str]:
     if not email:
         return None
     email_l = email.strip().lower()
+
+    # 1) Tentativa por e-mail (workEmail) via PIM (método atual)
     try:
         data = client.request("GET", f"pim/employees?limit=50&email={email_l}")
         if isinstance(data, dict):
@@ -973,6 +1002,14 @@ def _map_email_to_empnumber(client: _OrangeHRMClient, email: str) -> Optional[st
                     return str(emp["empNumber"])
     except Exception:
         pass
+
+    # 2) Tentativa por username = prefixo do e-mail (ex.: ricardo.sousa)
+    username = _email_to_username(email_l)
+    emp_no = _try_map_by_admin_users(client, username)
+    if emp_no:
+        return emp_no
+
+    # 3) Fallback: listar todos e comparar pelo workEmail (caso 1 não funcione por filtros)
     try:
         employees, _emp_map, _all = _cached_employees_and_map(
             _get_setting("domain") or "", _get_setting("client_id") or "", _get_setting("refresh_token") or ""
@@ -983,6 +1020,7 @@ def _map_email_to_empnumber(client: _OrangeHRMClient, email: str) -> Optional[st
                 return str(emp["empNumber"])
     except Exception:
         pass
+
     return None
 
 # =============================
@@ -1078,46 +1116,12 @@ def render_orangehrm_pivot_tab():
     api_base = domain.rstrip("/") + "/api/v2/"
     token_url = domain.rstrip("/") + "/oauth2/token"
 
-    with st.expander("Diagnóstico OrangeHRM (env efetivo)"):
-        domain = _get_setting("domain")
-        client_id = _get_setting("client_id")
-        refresh_token = _get_setting("refresh_token")
+    with st.expander("Diagnóstico de mapeamento e‑mail → empNumber"):
+        sess_email = st.session_state.get("o365_auth", {}).get("email", "")
         st.write({
-            "ORANGEHRM_DOMAIN": domain,
-            "ORANGEHRM_CLIENT_ID": client_id,
-            "ORANGEHRM_REFRESH_TOKEN_prefix": (refresh_token[:10] + "...") if refresh_token else "(vazio)",
-            "token_url": domain.rstrip("/") + "/oauth2/token" if domain else "(indefinido)",
+            "email_o365": sess_email,
+            "username_derivado": _email_to_username(sess_email),
         })
-
-    with st.expander("Diagnóstico OrangeHRM (env efetivo)"):
-        domain = _get_setting("domain")
-        client_id = _get_setting("client_id")
-        refresh_token = _get_setting("refresh_token")
-        st.write({
-            "ORANGEHRM_DOMAIN": domain,
-            "ORANGEHRM_CLIENT_ID": client_id,
-            "ORANGEHRM_REFRESH_TOKEN_prefix": (refresh_token[:10] + "...") if refresh_token else "(vazio)",
-            "token_url": domain.rstrip("/") + "/oauth2/token" if domain else "(indefinido)",
-        })
-        # Teste imediato ao endpoint de token
-        test = st.button("Testar refresh token agora")
-        if test:
-            try:
-                url = domain.rstrip("/") + "/oauth2/token"
-                data = {
-                    "grant_type": "refresh_token",
-                    "client_id": client_id.strip(),
-                    "refresh_token": refresh_token.strip(),
-                }
-                r = requests.post(url, data=data, timeout=20)
-                st.write({"status": r.status_code, "content_type": r.headers.get("Content-Type")})
-                # Mostra JSON se houver
-                try:
-                    st.json(r.json())
-                except Exception:
-                    st.code(r.text)
-            except Exception as e:
-                st.error(f"Falha no POST ao token endpoint: {e}")
     
     st.header("Folhas de Horas — Tabela Dinâmica por Colaborador")
 
