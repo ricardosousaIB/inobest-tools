@@ -1139,6 +1139,17 @@ def render_orangehrm_oauth_bootstrap_tab():
                     })
                     st.code(body.get("refresh_token", ""), language="text")
                     st.warning("Copie o refresh_token acima e configure ORANGEHRM_REFRESH_TOKEN no stack.env. Depois redeploy.")
+                    shared_path = os.getenv("ORANGEHRM_REFRESH_TOKEN_FILE", "")
+                    rt_new = body.get("refresh_token", "")
+                    if shared_path and rt_new:
+                        try:
+                            _write_shared_refresh_token(shared_path, rt_new)
+                            st.success(f"Refresh token gravado no ficheiro partilhado: {shared_path}")
+                        except Exception as e:
+                            st.warning(f"Não foi possível gravar no ficheiro partilhado ({shared_path}): {e}")
+                    else:
+                        if not shared_path:
+                            st.info("Defina ORANGEHRM_REFRESH_TOKEN_FILE para gravar automaticamente o refresh token num ficheiro partilhado.")    
                 else:
                     st.error(f"Falha ao obter tokens (HTTP {status}).")
                     st.write("Resposta do servidor:")
