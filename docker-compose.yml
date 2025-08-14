@@ -6,7 +6,10 @@ services:
       context: . # O contexto de construção é o diretório atual (onde o Dockerfile está no repositório clonado)
       dockerfile: Dockerfile # O nome do seu Dockerfile
     image: ricardosousaib/inobest-tools:latest # Este nome é para TAGGEAR a imagem construída localmente
+    pull_policy: never
     container_name: inobest-tools-app
+    env_file:
+      - stack.env
     ports:
       - "8501:8501"
     restart: unless-stopped
