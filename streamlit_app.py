@@ -591,13 +591,14 @@ def _oauth_token_exchange_with_pkce(token_url: str, client_id: str, code: str, r
 def _get_setting(key: str, default: str = "") -> str:
     env_key = f"ORANGEHRM_{key.upper()}"
     v = os.getenv(env_key)
-    if v:
-        return v
+    if v is not None and isinstance(v, str) and v.strip():
+        return v.strip()
     try:
-        return st.secrets["orangehrm"].get(key, default)
+        sv = st.secrets.get("orangehrm", {}).get(key, default)
+        return sv.strip() if isinstance(sv, str) else sv
     except Exception:
         return default
-
+        
 class _OrangeHRMClient:
     def __init__(self, client_id: str, refresh_token: str, token_url: str, api_base: str):
         self.client_id = client_id
@@ -1047,6 +1048,36 @@ def render_orangehrm_pivot_tab():
             "ORANGEHRM_REFRESH_TOKEN_prefix": (refresh_token[:10] + "...") if refresh_token else "(vazio)",
             "token_url": domain.rstrip("/") + "/oauth2/token" if domain else "(indefinido)",
         })
+
+    with st.expander("Diagnóstico OrangeHRM (env efetivo)"):
+        domain = _get_setting("domain")
+        client_id = _get_setting("client_id")
+        refresh_token = _get_setting("refresh_token")
+        st.write({
+            "ORANGEHRM_DOMAIN": domain,
+            "ORANGEHRM_CLIENT_ID": client_id,
+            "ORANGEHRM_REFRESH_TOKEN_prefix": (refresh_token[:10] + "...") if refresh_token else "(vazio)",
+            "token_url": domain.rstrip("/") + "/oauth2/token" if domain else "(indefinido)",
+        })
+        # Teste imediato ao endpoint de token
+        test = st.button("Testar refresh token agora")
+        if test:
+            try:
+                url = domain.rstrip("/") + "/oauth2/token"
+                data = {
+                    "grant_type": "refresh_token",
+                    "client_id": client_id.strip(),
+                    "refresh_token": refresh_token.strip(),
+                }
+                r = requests.post(url, data=data, timeout=20)
+                st.write({"status": r.status_code, "content_type": r.headers.get("Content-Type")})
+                # Mostra JSON se houver
+                try:
+                    st.json(r.json())
+                except Exception:
+                    st.code(r.text)
+            except Exception as e:
+                st.error(f"Falha no POST ao token endpoint: {e}")
     
     st.header("Folhas de Horas — Tabela Dinâmica por Colaborador")
 
