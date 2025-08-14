@@ -1038,15 +1038,15 @@ def render_orangehrm_pivot_tab():
     token_url = domain.rstrip("/") + "/oauth2/token"
 
     with st.expander("Diagnóstico OrangeHRM (env efetivo)"):
-    domain = _get_setting("domain")
-    client_id = _get_setting("client_id")
-    refresh_token = _get_setting("refresh_token")
-    st.write({
-        "ORANGEHRM_DOMAIN": domain,
-        "ORANGEHRM_CLIENT_ID": client_id,
-        "ORANGEHRM_REFRESH_TOKEN_prefix": (refresh_token[:10] + "...") if refresh_token else "(vazio)",
-        "token_url": domain.rstrip("/") + "/oauth2/token" if domain else "(indefinido)",
-    })
+        domain = _get_setting("domain")
+        client_id = _get_setting("client_id")
+        refresh_token = _get_setting("refresh_token")
+        st.write({
+            "ORANGEHRM_DOMAIN": domain,
+            "ORANGEHRM_CLIENT_ID": client_id,
+            "ORANGEHRM_REFRESH_TOKEN_prefix": (refresh_token[:10] + "...") if refresh_token else "(vazio)",
+            "token_url": domain.rstrip("/") + "/oauth2/token" if domain else "(indefinido)",
+        })
     
     st.header("Folhas de Horas — Tabela Dinâmica por Colaborador")
 
