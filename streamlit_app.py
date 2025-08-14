@@ -968,30 +968,69 @@ def _email_to_username(email: str) -> str:
 
 def _try_map_by_admin_users(client: _OrangeHRMClient, username: str) -> Optional[str]:
     """
-    Tenta mapear via endpoint admin/users?userName=<username>.
-    Requer permissões para /api/v2/admin/users. Extrai empNumber do objeto employee.
+    Mapeia via /api/v2/admin/users tentando vários filtros comuns.
+    Requer permissões para admin/users. Extrai empNumber de u["employee"].
     """
     if not username:
         return None
+
+    def _extract_emp_no(u: dict) -> Optional[str]:
+        emp = u.get("employee") if isinstance(u.get("employee"), dict) else {}
+        emp_no = emp.get("empNumber") or u.get("empNumber") or None
+        return str(emp_no) if emp_no else None
+
+    # 1) Filtro direto por userName
     try:
         data = client.request("GET", f"admin/users?limit=50&userName={username}")
         arr = data.get("data") if isinstance(data, dict) else (data if isinstance(data, list) else [])
         for u in arr:
-            emp = u.get("employee") if isinstance(u.get("employee"), dict) else {}
-            emp_no = emp.get("empNumber") or u.get("empNumber") or None
+            emp_no = _extract_emp_no(u)
             if emp_no:
-                return str(emp_no)
+                return emp_no
     except Exception:
-        # Pode não ter permissões para admin/users; segue o fallback
         pass
+
+    # 2) Tentativa por employeeEmail (se a tua API suportar este filtro)
+    try:
+        # Se soubermos o email completo podemos tentar aqui também, mas como recebemos só username,
+        # este passo é opcional e pode ser removido. Mantemos apenas por compatibilidade nalgumas instâncias.
+        # data = client.request("GET", f"admin/users?limit=50&employeeEmail={username}@inobest.com")
+        # ...
+        pass
+    except Exception:
+        pass
+
+    # 3) Paginar admin/users sem filtro e procurar username localmente
+    #    (só se o token tiver permissão, e pode ser pesado; limitamos a algumas páginas)
+    try:
+        limit, offset, scanned = 100, 0, 0
+        max_scan = 1000  # salvaguarda
+        while scanned < max_scan:
+            data = client.request("GET", f"admin/users?limit={limit}&offset={offset}")
+            arr = data.get("data") if isinstance(data, dict) else (data if isinstance(data, list) else [])
+            if not arr:
+                break
+            for u in arr:
+                scanned += 1
+                u_name = (u.get("userName") or u.get("username") or "").strip().lower()
+                if u_name == username:
+                    emp_no = _extract_emp_no(u)
+                    if emp_no:
+                        return emp_no
+            if len(arr) < limit:
+                break
+            offset += limit
+    except Exception:
+        pass
+
     return None
-    
+
 def _map_email_to_empnumber(client: _OrangeHRMClient, email: str) -> Optional[str]:
     if not email:
         return None
     email_l = email.strip().lower()
 
-    # 1) Tentativa por e-mail (workEmail) via PIM (método atual)
+    # 1) Tentativa por e-mail (workEmail) via PIM
     try:
         data = client.request("GET", f"pim/employees?limit=50&email={email_l}")
         if isinstance(data, dict):
@@ -1009,7 +1048,7 @@ def _map_email_to_empnumber(client: _OrangeHRMClient, email: str) -> Optional[st
     if emp_no:
         return emp_no
 
-    # 3) Fallback: listar todos e comparar pelo workEmail (caso 1 não funcione por filtros)
+    # 3) Fallback: listar todos via PIM e comparar pelo workEmail (caso 1 não resulte)
     try:
         employees, _emp_map, _all = _cached_employees_and_map(
             _get_setting("domain") or "", _get_setting("client_id") or "", _get_setting("refresh_token") or ""
