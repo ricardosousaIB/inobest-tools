@@ -1085,8 +1085,8 @@ def render_orangehrm_oauth_bootstrap_tab():
         with c2:
             st.write(" ")
 
-        #if "pkce_code_verifier" not in st.session_state or st.form_submit_button("Gerar novo code_verifier"):
-        #    st.session_state["pkce_code_verifier"] = _pkce_generate_code_verifier()
+        if "pkce_code_verifier" not in st.session_state or st.form_submit_button("Gerar novo code_verifier"):
+            st.session_state["pkce_code_verifier"] = _pkce_generate_code_verifier()
         code_verifier = st.session_state["pkce_code_verifier"]
         code_challenge = _pkce_code_challenge(code_verifier)
 
