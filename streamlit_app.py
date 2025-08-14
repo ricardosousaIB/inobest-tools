@@ -731,6 +731,60 @@ def _get_hours_by_employee_and_project(
             "totalHours": round(total, 2),
         })
     return rows
+
+
+def _get_hours_by_client_and_project(
+    client: "_OrangeHRMClient",
+    emp_numbers: List[str],
+    from_date: str = None,
+    to_date: str = None,
+) -> List[Dict[str, Any]]:
+    """
+    Agrega horas por Cliente × Projeto (across colaboradores selecionados).
+    Retorna linhas no formato longo: { clientName, projectName, totalHours }.
+    """
+    acc: Dict[tuple, float] = {}
+
+    for emp in emp_numbers:
+        offset = 0
+        while True:
+            sheets = _list_employee_timesheets(client, emp, from_date=from_date, to_date=to_date, limit=50, offset=offset)
+            if not sheets:
+                break
+            for ts in sheets:
+                ts_id = str(ts.get("id") or ts.get("timesheetId") or "")
+                if not ts_id:
+                    continue
+                entries = _get_timesheet_entries(client, ts_id)
+                for e in entries:
+                    hours = _sum_entry_hours(e)
+                    proj = e.get("project") if isinstance(e.get("project"), dict) else {}
+                    # Cliente (customer) e Projeto
+                    customer = proj.get("customer") if isinstance(proj.get("customer"), dict) else {}
+                    client_name = (
+                        customer.get("name")
+                        or proj.get("customerName")
+                        or e.get("customerName")
+                        or "Sem Cliente"
+                    )
+                    project_name = (
+                        (proj.get("name") or e.get("projectName") or e.get("project_name"))
+                        or "Sem Projeto"
+                    )
+                    key = (str(client_name), str(project_name))
+                    acc[key] = acc.get(key, 0.0) + hours
+            if len(sheets) < 50:
+                break
+            offset += 50
+
+    rows: List[Dict[str, Any]] = []
+    for (client_name, project_name), total in acc.items():
+        rows.append({
+            "clientName": client_name,
+            "projectName": project_name,
+            "totalHours": round(total, 2),
+        })
+    return rows
     
 def _pivot_hours_by_employee_and_project(rows: List[Dict[str, Any]]) -> pd.DataFrame:
     if not rows:
