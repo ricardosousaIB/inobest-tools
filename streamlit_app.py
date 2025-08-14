@@ -401,14 +401,12 @@ def saf_t_tab():
         )
 
 # ======= OrangeHRM Pivot Tab (auto-contido) =======
-import os
 import time
 from io import BytesIO
 from typing import List, Dict, Any
 
 import pandas as pd
 import requests
-import streamlit as st
 
 def _get_setting(key: str, default: str = "") -> str:
     # Lê ORANGEHRM_* do ambiente; fallback para st.secrets['orangehrm'][key]
@@ -638,7 +636,7 @@ def _cached_employees_and_map(domain: str, client_id: str, refresh_token: str):
     return emps, emp_map, emp_numbers
 
 def render_orangehrm_pivot_tab():
-    # Lê configs
+    # Ler configurações
     domain = _get_setting("domain") or "https://rh.inobest.com/web/index.php/"
     client_id = _get_setting("client_id") or ""
     refresh_token = _get_setting("refresh_token") or ""
@@ -651,18 +649,26 @@ def render_orangehrm_pivot_tab():
     token_url = domain.rstrip("/") + "/oauth2/token"
     client = _OrangeHRMClient(client_id, refresh_token, token_url, api_base)
 
-    st.header("Timesheets - Pivot por Funcionário")
-    with st.sidebar:
-        st.caption("Parâmetros da aba: Timesheets Pivot")
-        from_date = st.date_input("De (início do período)", None, format="YYYY-MM-DD", key="ts_from_date")
-        to_date   = st.date_input("Até (fim do período)", None, format="YYYY-MM-DD", key="ts_to_date")
-        from_date_str = from_date.isoformat() if from_date else None
-        to_date_str   = to_date.isoformat() if to_date else None
-        run_btn = st.button("Gerar Pivot", key="run_pivot_btn")
+    st.header("Folhas de Horas — Tabela Dinâmica por Colaborador")
 
-    with st.spinner("Carregando colaboradores..."):
+    # Filtros no topo da aba
+    with st.container():
+        c1, c2, c3 = st.columns([1, 1, 0.6])
+        with c1:
+            from_date = st.date_input("De (início do período)", None, format="YYYY-MM-DD", key="ts_from_date")
+        with c2:
+            to_date = st.date_input("Até (fim do período)", None, format="YYYY-MM-DD", key="ts_to_date")
+        with c3:
+            run_btn = st.button("Gerar Tabela Dinâmica", key="run_pivot_btn")
+
+    from_date_str = from_date.isoformat() if from_date else None
+    to_date_str   = to_date.isoformat() if to_date else None
+
+    # Carregar colaboradores (em cache)
+    with st.spinner("A carregar colaboradores..."):
         employees, emp_map, all_emp_numbers = _cached_employees_and_map(domain, client_id, refresh_token)
 
+    # Filtro de colaboradores nesta aba
     emp_display = {k: emp_map.get(k, k) for k in all_emp_numbers}
     emp_choices = st.multiselect(
         "Filtrar colaboradores (opcional)",
@@ -677,7 +683,7 @@ def render_orangehrm_pivot_tab():
             st.warning("Selecione pelo menos um colaborador.")
             return
 
-        with st.spinner("Buscando timesheets e calculando totais..."):
+        with st.spinner("A obter folhas de horas e a calcular totais..."):
             rows = _get_totals_by_employee_and_timesheet(
                 client,
                 emp_choices,
@@ -687,29 +693,21 @@ def render_orangehrm_pivot_tab():
             )
             pivot_df = _pivot_hours_by_employee_and_start(rows)
 
-        st.subheader("Pivot - Horas por Funcionário x Data de Início do Timesheet")
+        st.subheader("Horas por Colaborador × Data de Início da Folha de Horas")
         if pivot_df.empty:
-            st.info("Nenhum dado encontrado para os filtros selecionados.")
+            st.info("Não foram encontrados dados para os filtros selecionados.")
         else:
             st.dataframe(pivot_df, use_container_width=True)
 
-            csv_bytes = pivot_df.to_csv(index=True).encode("utf-8")
-            st.download_button(
-                "Baixar CSV",
-                data=csv_bytes,
-                file_name="timesheet_pivot.csv",
-                mime="text/csv",
-                key="dl_csv_button",
-            )
-
+            # Descarregar Excel (inclui folha 'Pivot' e folha 'Dados')
             xlsx_buffer = BytesIO()
             with pd.ExcelWriter(xlsx_buffer, engine="openpyxl") as writer:
                 pivot_df.to_excel(writer, sheet_name="Pivot", index=True)
                 pd.DataFrame(rows).to_excel(writer, sheet_name="Dados", index=False)
             st.download_button(
-                "Baixar Excel",
+                "Descarregar Excel",
                 data=xlsx_buffer.getvalue(),
-                file_name="timesheet_pivot.xlsx",
+                file_name="folhas_horas_pivot.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 key="dl_xlsx_button",
             )
