@@ -1,7 +1,9 @@
 import streamlit as st
-import io, zipfile, re, csv, os
+import io, zipfile, re, csv, os, time, requests, base64, hashlib, secrets
 import xml.etree.ElementTree as ET
-from typing import Tuple
+import pandas as pd
+from typing import Tuple, List, Dict, Any
+from io import BytesIO
 
 st.set_page_config(layout="wide", page_title="Ferramentas de Ficheiros")
 
@@ -398,12 +400,27 @@ def saf_t_tab():
         )
 
 # ======= OrangeHRM Pivot Tab (auto-contido) =======
-import time
-from io import BytesIO
-from typing import List, Dict, Any
+def _pkce_generate_code_verifier(n_bytes: int = 64) -> str:
+    # Gera um code_verifier url-safe (43-128 chars). 64 bytes -> 86 chars base64-url.
+    return base64.urlsafe_b64encode(os.urandom(n_bytes)).rstrip(b"=").decode("ascii")
 
-import pandas as pd
-import requests
+def _pkce_code_challenge(verifier: str) -> str:
+    digest = hashlib.sha256(verifier.encode("ascii")).digest()
+    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+
+def _oauth_token_exchange_with_pkce(token_url: str, client_id: str, code: str, redirect_uri: str, code_verifier: str):
+    data = {
+        "grant_type": "authorization_code",
+        "client_id": client_id,
+        "code": code,
+        "redirect_uri": redirect_uri,
+        "code_verifier": code_verifier,
+    }
+    # Importante: sem Authorization header
+    r = requests.post(token_url, data=data, timeout=30)
+    ctype = r.headers.get("Content-Type", "")
+    body = r.json() if "application/json" in ctype else {"raw": r.text}
+    return r.status_code, body
 
 def _get_setting(key: str, default: str = "") -> str:
     # Lê ORANGEHRM_* do ambiente; fallback para st.secrets['orangehrm'][key]
@@ -632,6 +649,83 @@ def _cached_employees_and_map(domain: str, client_id: str, refresh_token: str):
     emp_numbers = list(emp_map.keys())
     return emps, emp_map, emp_numbers
 
+def render_orangehrm_oauth_bootstrap_tab():
+    st.header("Configuração OAuth (Admin) — Obter Refresh Token")
+
+    # Lê definições atuais (env > secrets)
+    domain = _get_setting("domain") or "https://rh.inobest.com/web/index.php/"
+    client_id = _get_setting("client_id") or ""
+    default_redirect = domain.rstrip("/")  # usa o mesmo domínio por defeito
+    token_url = domain.rstrip("/") + "/oauth2/token"
+    auth_base = domain.rstrip("/") + "/oauth2/authorize"
+
+    st.markdown("Use esta aba apenas uma vez para gerar um refresh_token e colocá-lo no stack.env. Depois pode remover esta aba.")
+
+    with st.form("oauth_bootstrap_form"):
+        c1, c2 = st.columns([1, 1])
+        with c1:
+            client_id_in = st.text_input("Client ID", value=client_id, help="O Client ID registado no OrangeHRM (OAuth).")
+            redirect_uri = st.text_input("Redirect URI", value=default_redirect, help="Tem de corresponder ao Redirect URI registado no OAuth.")
+        with c2:
+            st.write(" ")
+
+        # Gerar/verificar PKCE
+        # Mantemos na session_state para que o mesmo verifier seja usado na autorização e na troca
+        if "pkce_code_verifier" not in st.session_state or st.form_submit_button("Gerar novo code_verifier"):
+            st.session_state["pkce_code_verifier"] = _pkce_generate_code_verifier()
+        code_verifier = st.session_state["pkce_code_verifier"]
+        code_challenge = _pkce_code_challenge(code_verifier)
+
+        st.text_input("Code Verifier (guarde até concluir)", value=code_verifier, disabled=True)
+        st.text_input("Code Challenge (S256)", value=code_challenge, disabled=True)
+
+        # Montar URL de autorização
+        params = {
+            "response_type": "code",
+            "code_challenge_method": "S256",
+            "code_challenge": code_challenge,
+            "client_id": client_id_in,
+            "redirect_uri": redirect_uri,
+        }
+        from urllib.parse import urlencode
+        auth_url = auth_base + "?" + urlencode(params)
+
+        st.write("1) Clique no link abaixo, autentique-se e autorize a aplicação. Será redirecionado para o redirect_uri com um parâmetro 'code'.")
+        st.write(f"[Abrir e autorizar no OrangeHRM]({auth_url})")
+
+        auth_code = st.text_input("2) Cole aqui o 'code' devolvido no redirect", value="", help="Exemplo: https://.../?code=ABC...XYZ -> cole apenas o valor do code.")
+
+        submit_exchange = st.form_submit_button("3) Trocar code por tokens")
+        if submit_exchange:
+            if not auth_code:
+                st.error("Cole o 'code' devolvido pelo OrangeHRM.")
+            elif not client_id_in or not redirect_uri:
+                st.error("Preencha o Client ID e o Redirect URI.")
+            else:
+                st.info(f"A enviar pedido ao token endpoint: {token_url}")
+                status, body = _oauth_token_exchange_with_pkce(
+                    token_url=token_url,
+                    client_id=client_id_in,
+                    code=auth_code,
+                    redirect_uri=redirect_uri,
+                    code_verifier=code_verifier,
+                )
+                if status == 200 and isinstance(body, dict) and "refresh_token" in body:
+                    st.success("Tokens obtidos com sucesso.")
+                    st.json({
+                        "access_token_prefix": body.get("access_token", "")[:16] + "...",
+                        "expires_in": body.get("expires_in"),
+                        "refresh_token_prefix": body.get("refresh_token", "")[:12] + "...",
+                        "token_type": body.get("token_type"),
+                        "scope": body.get("scope"),
+                    })
+                    st.code(body.get("refresh_token", ""), language="text")
+                    st.warning("Copie o refresh_token acima e atualize o ficheiro stack.env no Portainer: ORANGEHRM_REFRESH_TOKEN=<este valor>. Depois redeploy.")
+                else:
+                    st.error(f"Falha ao obter tokens (HTTP {status}).")
+                    st.write("Resposta do servidor:")
+                    st.json(body)
+
 def render_orangehrm_pivot_tab():
     # Ler configurações
     domain = _get_setting("domain") or "https://rh.inobest.com/web/index.php/"
@@ -712,10 +806,12 @@ def render_orangehrm_pivot_tab():
 
 
 # --- Lógica Principal da Aplicação (Usando Abas) ---
-tab1, tab2, tab3 = st.tabs(["Agregador de Excel", "SAF-T Faturação → CSV", "Timesheets Pivot"])
+tab1, tab2, tab3, tab4 = st.tabs(["Agregador de Excel", "SAF-T Faturação → CSV", "Configuração OAuth (Admin)", "Timesheets Pivot"])
 with tab1:
     excel_aggregator_app()
 with tab2:
     saf_t_tab()
 with tab3:
+    render_orangehrm_oauth_bootstrap_tab()
+with tab4:
     render_orangehrm_pivot_tab()
