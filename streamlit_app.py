@@ -20,6 +20,16 @@ def _get_oauth_admin_password() -> str:
         pwd = os.environ.get("OAUTH_ADMIN_PASSWORD")
     return pwd or ""
 
+def _safe_rerun():
+    try:
+        st.rerun()
+    except AttributeError:
+        # Compatibilidade com versões antigas
+        try:
+            st.experimental_rerun()
+        except Exception:
+            pass
+
 def _ensure_oauth_admin():
     """Protege a aba OAuth com password. Chama no início da aba e interrompe se não autenticado."""
     if "oauth_admin_ok" not in st.session_state:
@@ -31,7 +41,7 @@ def _ensure_oauth_admin():
         with col2:
             if st.button("Terminar sessão", key="oauth_admin_logout"):
                 st.session_state["oauth_admin_ok"] = False
-                st.experimental_rerun()
+                _safe_rerun()
         return  # já autenticado
 
     admin_pwd = _get_oauth_admin_password()
@@ -47,7 +57,7 @@ def _ensure_oauth_admin():
         if pwd == admin_pwd:
             st.session_state["oauth_admin_ok"] = True
             st.success("Autenticação bem-sucedida.")
-            st.experimental_rerun()
+            _safe_rerun()
         else:
             st.error("Password incorreta.")
             st.stop()
