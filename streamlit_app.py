@@ -702,21 +702,35 @@ def _get_hours_by_employee_client_project(
                 for e in entries:
                     hours = _sum_entry_hours(e)
 
+                    # Extrair objetos possíveis
                     proj = e.get("project") if isinstance(e.get("project"), dict) else {}
                     customer = proj.get("customer") if isinstance(proj.get("customer"), dict) else {}
-
+                    
+                    # Tenta primeiro usar o que vier na entrada
                     client_name = (
                         customer.get("name")
+                        or (proj.get("customer").get("name") if isinstance(proj.get("customer"), dict) else None)
                         or proj.get("customerName")
+                        or (e.get("customer").get("name") if isinstance(e.get("customer"), dict) else None)
                         or e.get("customerName")
-                        or "Sem Cliente"
+                        or e.get("customer_name")
                     )
                     project_name = (
                         proj.get("name")
+                        or (e.get("project").get("name") if isinstance(e.get("project"), dict) else None)
                         or e.get("projectName")
                         or e.get("project_name")
-                        or "Sem Projeto"
                     )
+                    
+                    # Se faltar cliente ou projeto, tenta resolver via project_id
+                    project_id = proj.get("id") or e.get("projectId") or e.get("project_id")
+                    if (not client_name or not project_name) and project_id is not None:
+                        p_name, c_name = _resolve_project_names_and_customer(client, project_id, proj_cust_cache)
+                        project_name = project_name or p_name
+                        client_name = client_name or c_name
+                    
+                    client_name = client_name or "Sem Cliente"
+                    project_name = project_name or "Sem Projeto"
 
                     key = (str(emp), str(client_name), str(project_name))
                     acc[key] = acc.get(key, 0.0) + hours
@@ -734,6 +748,43 @@ def _get_hours_by_employee_client_project(
             "totalHours": round(total, 2),
         })
     return rows
+
+def _resolve_project_names_and_customer(
+    client: "_OrangeHRMClient",
+    project_id: Any,
+    cache: Dict[str, Dict[str, str]],
+) -> Tuple[str, str]:
+    """
+    Dado um project_id, devolve (project_name, customer_name) usando cache e o endpoint de projetos.
+    """
+    pid = str(project_id)
+    if pid in cache:
+        d = cache[pid]
+        return d.get("projectName") or "Sem Projeto", d.get("customerName") or "Sem Cliente"
+
+    # Tenta obter detalhes do projeto (v2/time/projects/{id} ou v2/projects/{id}, conforme versão)
+    project_name, customer_name = "Sem Projeto", "Sem Cliente"
+    endpoints = [f"time/projects/{pid}", f"projects/{pid}"]  # tentamos ambos
+    for ep in endpoints:
+        try:
+            data = client.request("GET", ep)
+            if isinstance(data, dict):
+                # Estruturas comuns no OrangeHRM v2
+                proj = data.get("data") or data  # alguns retornam {"data": {...}}
+                if isinstance(proj, dict):
+                    project_name = proj.get("name") or proj.get("projectName") or project_name
+                    cust = proj.get("customer")
+                    if isinstance(cust, dict):
+                        customer_name = cust.get("name") or customer_name
+                    else:
+                        customer_name = proj.get("customerName") or customer_name
+                    break
+        except Exception:
+            # Ignora e tenta o próximo endpoint
+            pass
+
+    cache[pid] = {"projectName": project_name, "customerName": customer_name}
+    return project_name, customer_name
 
 def render_orangehrm_oauth_bootstrap_tab():
     st.header("Configuração OAuth (Admin) — Obter Refresh Token")
