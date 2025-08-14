@@ -207,8 +207,20 @@ def _get_oauth_admin_password() -> str:
         pwd = os.environ.get("OAUTH_ADMIN_PASSWORD")
     return pwd or ""
 
-def _ensure_oauth_admin():
-    """Protect the OAuth admin tab with a simple password."""
+def _ensure_oauth_admin() -> str:
+    """
+    Protege a aba OAuth Admin.
+    - Se o utilizador constar nos emails de admin O365, dá acesso sem password.
+    - Caso contrário, permite acesso com password (se configurada).
+    - Não chama st.stop(); devolve um estado para a aba decidir o que renderizar.
+
+    Returns: "ok" | "needs-auth" | "no-access"
+    """
+    # Auto-grant para administradores definidos por email
+    if _is_admin_o365():
+        return "ok"
+
+    # Fallback: password gate
     if "oauth_admin_ok" not in st.session_state:
         st.session_state["oauth_admin_ok"] = False
 
@@ -218,12 +230,12 @@ def _ensure_oauth_admin():
             if st.button("Terminar sessão", key="oauth_admin_logout"):
                 st.session_state["oauth_admin_ok"] = False
                 _safe_rerun()
-        return
+        return "ok"
 
     admin_pwd = _get_oauth_admin_password()
     if not admin_pwd:
-        st.error("Password de administrador não configurada. Defina oauth_admin_password em secrets ou OAUTH_ADMIN_PASSWORD no ambiente.")
-        st.stop()
+        st.error("Área restrita. Contacte um administrador para aceder a esta secção (password não configurada).")
+        return "no-access"
 
     st.info("Área restrita. Introduza a password de administrador para continuar.")
     with st.form("oauth_admin_login"):
@@ -234,11 +246,12 @@ def _ensure_oauth_admin():
             st.session_state["oauth_admin_ok"] = True
             st.success("Autenticação bem-sucedida.")
             _safe_rerun()
+            return "ok"
         else:
             st.error("Password incorreta.")
-            st.stop()
-    else:
-        st.stop()
+            return "no-access"
+
+    return "needs-auth"
 
 # ========================================
 # Excel Aggregator (ZIP of Excel -> single CSV in ZIP)
@@ -937,8 +950,15 @@ def _map_email_to_empnumber(client: _OrangeHRMClient, email: str) -> Optional[st
 
 def render_orangehrm_oauth_bootstrap_tab():
     st.header("Configuração OAuth (Admin) — Obter Refresh Token")
-    _ensure_oauth_admin()
 
+    status = _ensure_oauth_admin()
+    # Só renderiza o conteúdo da aba se houver acesso
+    if status != "ok":
+        # "needs-auth" mostra o formulário acima; "no-access" mostra erro.
+        # Em ambos os casos, apenas não renderizamos o resto desta aba.
+        return
+
+    # (continua daqui para baixo o conteúdo atual da aba: leitura de domain, client_id, PKCE, etc.)
     domain = _get_setting("domain") or "https://rh.inobest.com/web/index.php/"
     client_id = _get_setting("client_id") or ""
     default_redirect = domain.rstrip("/")
