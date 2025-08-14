@@ -907,56 +907,56 @@ def render_orangehrm_pivot_tab():
                 key="dl_xlsx_button",
             )
         # ——————————————————————————————————————————————
-        # Nova secção: Tabela por Colaborador com Projetos em linhas
+        # Nova secção: Tabela por Cliente com Projetos em linhas
         # ——————————————————————————————————————————————
-        st.subheader("Projetos por Colaborador — Totais de Horas")
-
-        with st.spinner("A obter entradas e a agregar por projeto..."):
-            proj_rows = _get_hours_by_employee_and_project(
+        st.subheader("Projetos por Cliente — Totais de Horas")
+        
+        with st.spinner("A obter entradas e a agregar por cliente e projeto..."):
+            client_proj_rows = _get_hours_by_client_and_project(
                 client,
                 emp_choices,
-                emp_map,
                 from_date=from_date_str,
                 to_date=to_date_str,
             )
-            proj_df = pd.DataFrame(proj_rows)
-
-        if proj_df.empty:
-            st.info("Não foram encontrados dados por projeto para os filtros selecionados.")
+            client_proj_df = pd.DataFrame(client_proj_rows)
+        
+        if client_proj_df.empty:
+            st.info("Não foram encontrados dados por cliente/projeto para os filtros selecionados.")
         else:
-            # Ordenar por colaborador e horas desc
-            proj_df = proj_df.sort_values(by=["empName", "totalHours"], ascending=[True, False])
-
-            # Mostrar tabela por colaborador (um bloco por colaborador)
-            for emp, g in proj_df.groupby("empName", sort=False):
-                st.markdown(f"### {emp}")
+            # Ordenar por cliente e horas desc
+            client_proj_df = client_proj_df.sort_values(by=["clientName", "totalHours"], ascending=[True, False])
+        
+            # Mostrar tabela por cliente (um bloco por cliente)
+            for customer, g in client_proj_df.groupby("clientName", sort=False):
+                st.markdown(f"### {customer}")
                 show = g[["projectName", "totalHours"]].rename(columns={
                     "projectName": "Projeto",
                     "totalHours": "Total de Horas"
                 })
                 st.dataframe(show.reset_index(drop=True), use_container_width=True)
-
-            proj_xlsx_buffer = BytesIO()
-            with pd.ExcelWriter(proj_xlsx_buffer, engine="openpyxl") as writer:
+        
+            # Exportação apenas em Excel (sem CSV)
+            client_proj_xlsx_buffer = BytesIO()
+            with pd.ExcelWriter(client_proj_xlsx_buffer, engine="openpyxl") as writer:
                 # Folha detalhada (formato longo)
-                proj_df.rename(columns={
-                    "empName": "Colaborador",
+                client_proj_df.rename(columns={
+                    "clientName": "Cliente",
                     "projectName": "Projeto",
                     "totalHours": "TotalHoras"
-                })[["Colaborador", "Projeto", "TotalHoras"]].to_excel(writer, sheet_name="Projetos_por_Colaborador", index=False)
-
-                # Opcional: uma folha por colaborador
-                for emp, g in proj_df.groupby("empName", sort=False):
+                })[["Cliente", "Projeto", "TotalHoras"]].to_excel(writer, sheet_name="Projetos_por_Cliente", index=False)
+        
+                # Opcional: uma folha por cliente
+                for customer, g in client_proj_df.groupby("clientName", sort=False):
                     g.rename(columns={"projectName": "Projeto", "totalHours": "TotalHoras"})[["Projeto", "TotalHoras"]].to_excel(
-                        writer, sheet_name=(emp[:28] or "Sem_Nome"), index=False
+                        writer, sheet_name=(str(customer)[:28] or "Sem_Cliente"), index=False
                     )
-
+        
             st.download_button(
-                "Descarregar Excel (Projetos por Colaborador)",
-                data=proj_xlsx_buffer.getvalue(),
-                file_name="folhas_horas_projetos_por_colaborador.xlsx",
+                "Descarregar Excel (Projetos por Cliente)",
+                data=client_proj_xlsx_buffer.getvalue(),
+                file_name="folhas_horas_projetos_por_cliente.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key="dl_xlsx_proj_por_colab",
+                key="dl_xlsx_proj_por_cliente",
             )
 # ======= Fim do bloco OrangeHRM Pivot Tab =======
 
