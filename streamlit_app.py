@@ -9,6 +9,51 @@ st.set_page_config(layout="wide", page_title="Ferramentas de Ficheiros")
 
 st.title("Ferramentas de Ficheiros")
 
+def _get_oauth_admin_password() -> str:
+    # Prioridade: st.secrets, depois env vars
+    pwd = None
+    try:
+        pwd = st.secrets.get("oauth_admin_password")  # e.g., "oauth_admin_password" no secrets
+    except Exception:
+        pass
+    if not pwd:
+        pwd = os.environ.get("OAUTH_ADMIN_PASSWORD")
+    return pwd or ""
+
+def _ensure_oauth_admin():
+    """Protege a aba OAuth com password. Chama no início da aba e interrompe se não autenticado."""
+    if "oauth_admin_ok" not in st.session_state:
+        st.session_state["oauth_admin_ok"] = False
+
+    if st.session_state["oauth_admin_ok"]:
+        # Mostrar botão de terminar sessão no topo
+        col1, col2 = st.columns([1, 0.2])
+        with col2:
+            if st.button("Terminar sessão", key="oauth_admin_logout"):
+                st.session_state["oauth_admin_ok"] = False
+                st.experimental_rerun()
+        return  # já autenticado
+
+    admin_pwd = _get_oauth_admin_password()
+    if not admin_pwd:
+        st.error("Password de administrador não configurada. Defina oauth_admin_password em st.secrets ou OAUTH_ADMIN_PASSWORD no ambiente.")
+        st.stop()
+
+    st.info("Área restrita. Introduza a password de administrador para continuar.")
+    with st.form("oauth_admin_login"):
+        pwd = st.text_input("Password de administrador", type="password")
+        ok = st.form_submit_button("Entrar")
+    if ok:
+        if pwd == admin_pwd:
+            st.session_state["oauth_admin_ok"] = True
+            st.success("Autenticação bem-sucedida.")
+            st.experimental_rerun()
+        else:
+            st.error("Password incorreta.")
+            st.stop()
+    else:
+        st.stop()
+
 # --- Função para o Agregador de Excel (Seu código atual) ---
 def excel_aggregator_app():
     st.header("Agregador de Ficheiros Excel (via ZIP)")
@@ -789,6 +834,9 @@ def _resolve_project_names_and_customer(
 def render_orangehrm_oauth_bootstrap_tab():
     st.header("Configuração OAuth (Admin) — Obter Refresh Token")
 
+    # Proteção por password
+    _ensure_oauth_admin()
+    
     # Lê definições atuais (env > secrets)
     domain = _get_setting("domain") or "https://rh.inobest.com/web/index.php/"
     client_id = _get_setting("client_id") or ""
