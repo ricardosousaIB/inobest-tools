@@ -1080,8 +1080,8 @@ def render_orangehrm_oauth_bootstrap_tab():
     with st.form("oauth_bootstrap_form"):
         c1, c2 = st.columns([1, 1])
         with c1:
-            client_id_in = st.text_input("Client ID", value=client_id)
-            redirect_uri = st.text_input("Redirect URI", value=default_redirect)
+            client_id_in = st.text_input("Client ID", value=client_id, disabled=True)
+            redirect_uri = st.text_input("Redirect URI", value=default_redirect, disabled=True)
         with c2:
             st.write(" ")
 
