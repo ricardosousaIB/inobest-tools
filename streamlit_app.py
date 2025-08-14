@@ -1,9 +1,6 @@
 import streamlit as st
-import io
-import zipfile
+import io, zipfile, re, csv, os
 import xml.etree.ElementTree as ET
-import re
-import csv
 from typing import Tuple
 
 st.set_page_config(layout="wide", page_title="Ferramentas de Ficheiros")
