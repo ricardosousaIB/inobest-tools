@@ -675,7 +675,7 @@ def _sum_entry_hours(entry: Dict[str, Any]) -> float:
     return total
 
 
-def _get_hours_by_employee_and_project(
+def _get_hours_by_employee_client_project(
     client: "_OrangeHRMClient",
     emp_numbers: List[str],
     empname_map: Dict[str, str],
@@ -683,65 +683,8 @@ def _get_hours_by_employee_and_project(
     to_date: str = None,
 ) -> List[Dict[str, Any]]:
     """
-    Devolve linhas agregadas por colaborador × projeto (formato longo).
-    Cada linha: { empNumber, empName, projectId, projectName, totalHours }
-    """
-    acc: Dict[tuple, float] = {}
-    proj_names: Dict[str, str] = {}
-
-    for emp in emp_numbers:
-        offset = 0
-        while True:
-            sheets = _list_employee_timesheets(client, emp, from_date=from_date, to_date=to_date, limit=50, offset=offset)
-            if not sheets:
-                break
-            for ts in sheets:
-                ts_id = str(ts.get("id") or ts.get("timesheetId") or "")
-                if not ts_id:
-                    continue
-                entries = _get_timesheet_entries(client, ts_id)
-                for e in entries:
-                    hours = _sum_entry_hours(e)
-                    # Extrair projeto de forma robusta
-                    proj = e.get("project") if isinstance(e.get("project"), dict) else {}
-                    project_id = proj.get("id") or e.get("projectId") or e.get("project_id")
-                    project_name = (
-                        proj.get("name")
-                        or e.get("projectName")
-                        or e.get("project_name")
-                        or "Sem Projeto"
-                    )
-                    # Chave de agregação usa emp + project_id se existir; senão emp + nome
-                    key = (str(emp), str(project_id) if project_id is not None else f"name::{project_name}")
-                    acc[key] = acc.get(key, 0.0) + hours
-                    # Guardar nome do projeto por chave (prioriza nome visto)
-                    proj_names[key] = project_name
-            if len(sheets) < 50:
-                break
-            offset += 50
-
-    rows: List[Dict[str, Any]] = []
-    for key, total in acc.items():
-        emp_key, proj_key = key
-        rows.append({
-            "empNumber": emp_key,
-            "empName": empname_map.get(emp_key, emp_key),
-            "projectId": proj_key if not proj_key.startswith("name::") else None,
-            "projectName": proj_names.get(key, "Sem Projeto"),
-            "totalHours": round(total, 2),
-        })
-    return rows
-
-
-def _get_hours_by_client_and_project(
-    client: "_OrangeHRMClient",
-    emp_numbers: List[str],
-    from_date: str = None,
-    to_date: str = None,
-) -> List[Dict[str, Any]]:
-    """
-    Agrega horas por Cliente × Projeto (across colaboradores selecionados).
-    Retorna linhas no formato longo: { clientName, projectName, totalHours }.
+    Devolve linhas agregadas por colaborador × cliente × projeto (formato longo).
+    Cada linha: { empNumber, empName, clientName, projectName, totalHours }
     """
     acc: Dict[tuple, float] = {}
 
@@ -758,9 +701,10 @@ def _get_hours_by_client_and_project(
                 entries = _get_timesheet_entries(client, ts_id)
                 for e in entries:
                     hours = _sum_entry_hours(e)
+
                     proj = e.get("project") if isinstance(e.get("project"), dict) else {}
-                    # Cliente (customer) e Projeto
                     customer = proj.get("customer") if isinstance(proj.get("customer"), dict) else {}
+
                     client_name = (
                         customer.get("name")
                         or proj.get("customerName")
@@ -768,44 +712,28 @@ def _get_hours_by_client_and_project(
                         or "Sem Cliente"
                     )
                     project_name = (
-                        (proj.get("name") or e.get("projectName") or e.get("project_name"))
+                        proj.get("name")
+                        or e.get("projectName")
+                        or e.get("project_name")
                         or "Sem Projeto"
                     )
-                    key = (str(client_name), str(project_name))
+
+                    key = (str(emp), str(client_name), str(project_name))
                     acc[key] = acc.get(key, 0.0) + hours
             if len(sheets) < 50:
                 break
             offset += 50
 
     rows: List[Dict[str, Any]] = []
-    for (client_name, project_name), total in acc.items():
+    for (emp_key, client_name, project_name), total in acc.items():
         rows.append({
+            "empNumber": emp_key,
+            "empName": empname_map.get(emp_key, emp_key),
             "clientName": client_name,
             "projectName": project_name,
             "totalHours": round(total, 2),
         })
     return rows
-    
-def _pivot_hours_by_employee_and_project(rows: List[Dict[str, Any]]) -> pd.DataFrame:
-    if not rows:
-        return pd.DataFrame()
-    df = pd.DataFrame(rows)
-    index_col = "empName" if "empName" in df.columns else "empNumber"
-    col_col = "projectName" if "projectName" in df.columns else "projectKey"
-    pivot = pd.pivot_table(
-        df,
-        index=index_col,
-        columns=col_col,
-        values="totalHours",
-        aggfunc="sum",
-        fill_value=0.0,
-    )
-    # Ordena alfabeticamente os projetos para leitura mais fácil
-    try:
-        pivot = pivot[sorted(pivot.columns, key=lambda x: (str(x).lower()))]
-    except Exception:
-        pass
-    return pivot.sort_index()
 
 def render_orangehrm_oauth_bootstrap_tab():
     st.header("Configuração OAuth (Admin) — Obter Refresh Token")
@@ -961,56 +889,63 @@ def render_orangehrm_pivot_tab():
                 key="dl_xlsx_button",
             )
         # ——————————————————————————————————————————————
-        # Nova secção: Tabela por Cliente com Projetos em linhas
+        # Nova secção: Cliente/Projeto por Colaborador — Totais de Horas
         # ——————————————————————————————————————————————
-        st.subheader("Projetos por Cliente — Totais de Horas")
+        st.subheader("Cliente/Projeto por Colaborador — Totais de Horas")
         
         with st.spinner("A obter entradas e a agregar por cliente e projeto..."):
-            client_proj_rows = _get_hours_by_client_and_project(
+            ecp_rows = _get_hours_by_employee_client_project(
                 client,
                 emp_choices,
+                emp_map,
                 from_date=from_date_str,
                 to_date=to_date_str,
             )
-            client_proj_df = pd.DataFrame(client_proj_rows)
+            ecp_df = pd.DataFrame(ecp_rows)
         
-        if client_proj_df.empty:
+        if ecp_df.empty:
             st.info("Não foram encontrados dados por cliente/projeto para os filtros selecionados.")
         else:
-            # Ordenar por cliente e horas desc
-            client_proj_df = client_proj_df.sort_values(by=["clientName", "totalHours"], ascending=[True, False])
+            # Ordenar por colaborador, cliente e horas desc
+            ecp_df = ecp_df.sort_values(by=["empName", "clientName", "totalHours"], ascending=[True, True, False])
         
-            # Mostrar tabela por cliente (um bloco por cliente)
-            for customer, g in client_proj_df.groupby("clientName", sort=False):
-                st.markdown(f"### {customer}")
-                show = g[["projectName", "totalHours"]].rename(columns={
+            # Mostrar uma tabela por colaborador
+            for emp, g in ecp_df.groupby("empName", sort=False):
+                st.markdown(f"### {emp}")
+                show = g[["clientName", "projectName", "totalHours"]].rename(columns={
+                    "clientName": "Cliente",
                     "projectName": "Projeto",
                     "totalHours": "Total de Horas"
                 })
                 st.dataframe(show.reset_index(drop=True), use_container_width=True)
         
             # Exportação apenas em Excel (sem CSV)
-            client_proj_xlsx_buffer = BytesIO()
-            with pd.ExcelWriter(client_proj_xlsx_buffer, engine="openpyxl") as writer:
+            ecp_xlsx_buffer = BytesIO()
+            with pd.ExcelWriter(ecp_xlsx_buffer, engine="openpyxl") as writer:
                 # Folha detalhada (formato longo)
-                client_proj_df.rename(columns={
+                ecp_df.rename(columns={
+                    "empName": "Colaborador",
                     "clientName": "Cliente",
                     "projectName": "Projeto",
                     "totalHours": "TotalHoras"
-                })[["Cliente", "Projeto", "TotalHoras"]].to_excel(writer, sheet_name="Projetos_por_Cliente", index=False)
+                })[["Colaborador", "Cliente", "Projeto", "TotalHoras"]].to_excel(writer, sheet_name="Cliente_Projeto_por_Colab", index=False)
         
-                # Opcional: uma folha por cliente
-                for customer, g in client_proj_df.groupby("clientName", sort=False):
-                    g.rename(columns={"projectName": "Projeto", "totalHours": "TotalHoras"})[["Projeto", "TotalHoras"]].to_excel(
-                        writer, sheet_name=(str(customer)[:28] or "Sem_Cliente"), index=False
+                # Opcional: uma folha por colaborador
+                for emp, g in ecp_df.groupby("empName", sort=False):
+                    g.rename(columns={
+                        "clientName": "Cliente",
+                        "projectName": "Projeto",
+                        "totalHours": "TotalHoras"
+                    })[["Cliente", "Projeto", "TotalHoras"]].to_excel(
+                        writer, sheet_name=(str(emp)[:28] or "Sem_Nome"), index=False
                     )
         
             st.download_button(
-                "Descarregar Excel (Projetos por Cliente)",
-                data=client_proj_xlsx_buffer.getvalue(),
-                file_name="folhas_horas_projetos_por_cliente.xlsx",
+                "Descarregar Excel (Cliente/Projeto por Colaborador)",
+                data=ecp_xlsx_buffer.getvalue(),
+                file_name="folhas_horas_cliente_projeto_por_colaborador.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key="dl_xlsx_proj_por_cliente",
+                key="dl_xlsx_cliente_projeto_por_colab",
             )
 # ======= Fim do bloco OrangeHRM Pivot Tab =======
 
