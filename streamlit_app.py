@@ -149,14 +149,6 @@ def ensure_o365_login() -> bool:
             login_url = _o365_begin_login()
             if login_url:
                 st.markdown(f"[Clique aqui para iniciar sessão]({login_url})")
-        # Optional quick diagnostics
-        with st.expander("Diagnóstico de configuração O365"):
-            st.write({
-                "tenant": _o365_get_setting("tenant_id") or "(vazio)",
-                "client_id": _o365_get_setting("client_id") or "(vazio)",
-                "redirect_uri": _o365_get_setting("redirect_uri") or "(vazio)",
-                "authority": _o365_authority(),
-            })
         return False
 
     return True
@@ -1166,13 +1158,6 @@ def render_orangehrm_pivot_tab():
     api_base = domain.rstrip("/") + "/api/v2/"
     token_url = domain.rstrip("/") + "/oauth2/token"
 
-    with st.expander("Diagnóstico de mapeamento e‑mail → empNumber"):
-        sess_email = st.session_state.get("o365_auth", {}).get("email", "")
-        st.write({
-            "email_o365": sess_email,
-            "username_derivado": _email_to_username(sess_email),
-        })
-    
     st.header("Folhas de Horas — Tabela Dinâmica por Colaborador")
 
     c1, c2, c3 = st.columns([1, 1, 0.6])
