@@ -1,5 +1,5 @@
 import streamlit as st
-import io, zipfile, re, csv, os, time, requests, base64, hashlib, json
+import io, zipfile, re, csv, os, time, requests, base64, hashlib, json, tempfile
 from urllib.parse import urlencode
 import xml.etree.ElementTree as ET
 import pandas as pd
@@ -206,6 +206,30 @@ def _get_oauth_admin_password() -> str:
     if not pwd:
         pwd = os.environ.get("OAUTH_ADMIN_PASSWORD")
     return pwd or ""
+
+def _read_shared_refresh_token(path: str, fallback: str) -> str:
+    try:
+        if path and os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            rt = (data or {}).get("refresh_token", "")
+            if rt and isinstance(rt, str):
+                return rt.strip()
+    except Exception:
+        pass
+    return (fallback or "").strip()
+
+def _write_shared_refresh_token(path: str, refresh_token: str) -> None:
+    if not path or not refresh_token:
+        return
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = f"{path}.tmp-{int(time.time()*1000)}"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"refresh_token": refresh_token}, f)
+        os.replace(tmp, path)  # atomic on same filesystem
+    except Exception:
+        pass
 
 def _ensure_oauth_admin() -> str:
     """
@@ -604,12 +628,20 @@ class _OrangeHRMClient:
         self.client_id = client_id
         self.token_url = token_url
         self.api_base = api_base
+
         if "orange_access_token" not in st.session_state:
             st.session_state["orange_access_token"] = ""
         if "orange_expires_at" not in st.session_state:
             st.session_state["orange_expires_at"] = 0.0
         if "orange_refresh_token" not in st.session_state:
-            st.session_state["orange_refresh_token"] = refresh_token
+            st.session_state["orange_refresh_token"] = ""
+
+        # Novo: refresh_token partilhado por ficheiro (com fallback às envs)
+        refresh_token_env = refresh_token  # vem das envs
+        shared_path = os.getenv("ORANGEHRM_REFRESH_TOKEN_FILE", "")
+        self._shared_rt_path = shared_path
+        rt = _read_shared_refresh_token(shared_path, refresh_token_env)
+        st.session_state["orange_refresh_token"] = rt
 
     @property
     def access_token(self) -> str:
@@ -627,6 +659,8 @@ class _OrangeHRMClient:
         st.session_state["orange_access_token"] = token_resp["access_token"]
         if "refresh_token" in token_resp and token_resp["refresh_token"]:
             st.session_state["orange_refresh_token"] = token_resp["refresh_token"]
+            # Novo: escrever no armazenamento partilhado
+            _write_shared_refresh_token(self._shared_rt_path, token_resp["refresh_token"])
         expires_in = int(token_resp.get("expires_in", 3600))
         st.session_state["orange_expires_at"] = time.time() + max(expires_in - 60, 0)
 
@@ -634,6 +668,12 @@ class _OrangeHRMClient:
         return (not self.access_token) or time.time() >= self.expires_at
 
     def _refresh(self) -> bool:
+        # Novo: re-sync com armazenamento partilhado antes de chamar o token endpoint
+        path = getattr(self, "_shared_rt_path", "")
+        current_rt = _read_shared_refresh_token(path, st.session_state.get("orange_refresh_token", ""))
+        if current_rt and current_rt != st.session_state.get("orange_refresh_token"):
+            st.session_state["orange_refresh_token"] = current_rt
+
         if not self.refresh_token:
             return False
         data = {
