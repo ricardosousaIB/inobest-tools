@@ -1,9 +1,190 @@
 import streamlit as st
-import io, zipfile, re, csv, os, time, requests, base64, hashlib, secrets
+import io, zipfile, re, csv, os, time, requests, base64, hashlib, secrets, json
+from urllib.parse import urlencode
 import xml.etree.ElementTree as ET
 import pandas as pd
 from typing import Tuple, List, Dict, Any
 from io import BytesIO
+
+def _o365_get_setting(key: str) -> str:
+    # lê de st.secrets com fallback env
+    try:
+        val = st.secrets["o365"].get(key)
+    except Exception:
+        val = None
+    return val or os.environ.get(f"O365_{key.upper()}", "")
+
+def _o365_authority():
+    tenant = _o365_get_setting("tenant_id")
+    return f"https://login.microsoftonline.com/{tenant}/oauth2/v2.0"
+
+def _o365_auth_and_token_urls():
+    base = _o365_authority()
+    return base + "/authorize", base + "/token"
+
+def _o365_begin_login():
+    client_id = _o365_get_setting("client_id")
+    redirect_uri = _o365_get_setting("redirect_uri")
+    auth_url, _ = _o365_auth_and_token_urls()
+    scopes = ["openid", "profile", "email", "User.Read"]
+    params = {
+        "client_id": client_id,
+        "response_type": "code",
+        "redirect_uri": redirect_uri,
+        "response_mode": "query",
+        "scope": " ".join(scopes),
+    }
+    return f"{auth_url}?{urlencode(params)}"
+
+def _o365_exchange_code_for_tokens(code: str):
+    _, token_url = _o365_auth_and_token_urls()
+    client_id = _o365_get_setting("client_id")
+    client_secret = _o365_get_setting("client_secret")
+    redirect_uri = _o365_get_setting("redirect_uri")
+    data = {
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": redirect_uri,
+    }
+    r = requests.post(token_url, data=data, timeout=30)
+    r.raise_for_status()
+    return r.json()
+
+def _o365_refresh_tokens(refresh_token: str):
+    _, token_url = _o365_auth_and_token_urls()
+    client_id = _o365_get_setting("client_id")
+    client_secret = _o365_get_setting("client_secret")
+    data = {
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+        "scope": "openid profile email User.Read",
+    }
+    r = requests.post(token_url, data=data, timeout=30)
+    if not r.ok:
+        return None
+    return r.json()
+
+def _o365_parse_id_token(id_token: str) -> dict:
+    # parse JWT sem verificação de assinatura (apenas para claims não sensíveis no frontend)
+    try:
+        payload_b64 = id_token.split(".")[1] + "=="
+        payload_json = base64.urlsafe_b64decode(payload_b64.encode("utf-8")).decode("utf-8")
+        return json.loads(payload_json)
+    except Exception:
+        return {}
+
+def _safe_rerun():
+    try:
+        st.rerun()
+    except Exception:
+        pass
+
+def ensure_o365_login() -> bool:
+    # captura code=? da Microsoft, troca por tokens e guarda sessão
+    qp = st.query_params
+    code = qp.get("code", [None])[0] if isinstance(qp.get("code"), list) else qp.get("code")
+
+    if "o365_auth" not in st.session_state:
+        st.session_state["o365_auth"] = {}
+
+    sess = st.session_state["o365_auth"]
+
+    # concluir login se vier code
+    if code and not sess.get("access_token"):
+        with st.spinner("A concluir início de sessão Microsoft..."):
+            try:
+                tokens = _o365_exchange_code_for_tokens(code)
+                sess["access_token"] = tokens.get("access_token")
+                sess["refresh_token"] = tokens.get("refresh_token")
+                sess["expires_at"] = time.time() + int(tokens.get("expires_in", 3600)) - 30
+                sess["id_token"] = tokens.get("id_token", "")
+                claims = _o365_parse_id_token(sess["id_token"])
+                # Claims típicos a usar
+                sess["email"] = claims.get("preferred_username") or claims.get("email") or ""
+                sess["name"] = claims.get("name") or ""
+                sess["oid"] = claims.get("oid") or ""
+                # limpar code da URL
+                st.query_params.clear()
+                _safe_rerun()
+                return True
+            except Exception as e:
+                st.error(f"Falha a concluir sessão O365: {e}")
+                st.query_params.clear()
+                return False
+
+    # refresh se expirar
+    if sess.get("access_token") and time.time() >= sess.get("expires_at", 0):
+        tokens = _o365_refresh_tokens(sess.get("refresh_token", ""))
+        if tokens:
+            sess["access_token"] = tokens.get("access_token")
+            sess["refresh_token"] = tokens.get("refresh_token", sess.get("refresh_token"))
+            sess["expires_at"] = time.time() + int(tokens.get("expires_in", 3600)) - 30
+        else:
+            # sessão inválida
+            st.session_state.pop("o365_auth", None)
+
+    # se não autenticado, mostrar botão
+    if not sess.get("access_token"):
+        st.info("Para continuar, autentique-se com a sua conta Microsoft 365.")
+        if st.button("Iniciar sessão com Microsoft", key="o365_login_btn"):
+            st.markdown(f"[Clique aqui para iniciar sessão]({_o365_begin_login()})")
+        return False
+
+    return True
+
+def o365_logout_button():
+    # mostra o utilizador e botão de logout
+    sess = st.session_state.get("o365_auth", {})
+    user_label = sess.get("name") or sess.get("email") or "Utilizador"
+    c1, c2 = st.columns([1, 0.3])
+    with c1:
+        st.caption(f"Autenticado como: {user_label}")
+    with c2:
+        if st.button("Terminar sessão", key="o365_logout_btn"):
+            st.session_state.pop("o365_auth", None)
+            _safe_rerun()
+
+def _map_email_to_empnumber(client: "_OrangeHRMClient", email: str) -> Optional[str]:
+    if not email:
+        return None
+    email_l = email.strip().lower()
+
+    # Tentativa 1: endpoint de pesquisa por e-mail (ajusta se a tua API suportar)
+    try:
+        data = client.request("GET", f"pim/employees?limit=50&email={email_l}")
+        if isinstance(data, dict):
+            arr = data.get("data") or data.get("employees") or []
+            for emp in arr:
+                work = (emp.get("workEmail") or emp.get("email") or "").strip().lower()
+                if work == email_l and emp.get("empNumber"):
+                    return str(emp["empNumber"])
+    except Exception:
+        pass
+
+    # Tentativa 2: carregar lista (cache) e procurar por workEmail
+    try:
+        employees, emp_map, all_emp_numbers = _cached_employees_and_map(
+            _get_setting("domain") or "", _get_setting("client_id") or "", _get_setting("refresh_token") or ""
+        )
+        # Precisamos dos dados brutos com e-mails; se _cached_employees_and_map não os retorna, usa um list_all que devolva workEmail.
+        # Exemplo genérico (ajusta ao teu helper):
+        for emp in employees:
+            work = (emp.get("workEmail") or emp.get("email") or "").strip().lower()
+            if work == email_l and emp.get("empNumber"):
+                return str(emp["empNumber"])
+    except Exception:
+        pass
+
+    return None
+
+if not ensure_o365_login():
+    st.stop()
+
+o365_logout_button()
 
 st.set_page_config(layout="wide", page_title="Ferramentas de Ficheiros")
 
@@ -921,64 +1102,74 @@ def render_orangehrm_oauth_bootstrap_tab():
                     st.write("Resposta do servidor:")
                     st.json(body)
 
+def _is_admin_o365() -> bool:
+    try:
+        admins = st.secrets["o365"].get("admin_emails") or []
+    except Exception:
+        admins = []
+    email = st.session_state.get("o365_auth", {}).get("email", "").lower()
+    return email in [a.lower() for a in admins]
+
 def render_orangehrm_pivot_tab():
-    # Ler configurações
     domain = _get_setting("domain") or "https://rh.inobest.com/web/index.php/"
     client_id = _get_setting("client_id") or ""
     refresh_token = _get_setting("refresh_token") or ""
-
-    if not client_id or not refresh_token:
-        st.error("Credenciais em falta. Defina ORANGEHRM_CLIENT_ID e ORANGEHRM_REFRESH_TOKEN no ambiente (stack.env) ou em st.secrets['orangehrm'].")
-        return
-
     api_base = domain.rstrip("/") + "/api/v2/"
     token_url = domain.rstrip("/") + "/oauth2/token"
-    client = _OrangeHRMClient(client_id, refresh_token, token_url, api_base)
 
     st.header("Folhas de Horas — Tabela Dinâmica por Colaborador")
 
-    # Filtros no topo da aba
-    with st.container():
-        c1, c2, c3 = st.columns([1, 1, 0.6])
-        with c1:
-            from_date = st.date_input("De (início do período)", None, format="YYYY-MM-DD", key="ts_from_date")
-        with c2:
-            to_date = st.date_input("Até (fim do período)", None, format="YYYY-MM-DD", key="ts_to_date")
-        with c3:
-            run_btn = st.button("Gerar Tabela Dinâmica", key="run_pivot_btn")
-
+    # filtros de data...
+    c1, c2, c3 = st.columns([1, 1, 0.6])
+    with c1:
+        from_date = st.date_input("De (início do período)", None, format="YYYY-MM-DD", key="ts_from_date")
+    with c2:
+        to_date = st.date_input("Até (fim do período)", None, format="YYYY-MM-DD", key="ts_to_date")
+    with c3:
+        run_btn = st.button("Gerar Tabela Dinâmica", key="run_pivot_btn")
     from_date_str = from_date.isoformat() if from_date else None
-    to_date_str   = to_date.isoformat() if to_date else None
+    to_date_str = to_date.isoformat() if to_date else None
 
-    # Carregar colaboradores (em cache)
-    with st.spinner("A carregar colaboradores..."):
-        employees, emp_map, all_emp_numbers = _cached_employees_and_map(domain, client_id, refresh_token)
+    # Cliente de serviço (refresh_token) para chamadas OrangeHRM
+    if not (client_id and refresh_token):
+        st.error("Credenciais do serviço em falta (ORANGEHRM_CLIENT_ID/REFRESH_TOKEN).")
+        return
+    service_client = _OrangeHRMClient(client_id, refresh_token, token_url, api_base)
 
-    # Filtro de colaboradores nesta aba
-    emp_display = {k: emp_map.get(k, k) for k in all_emp_numbers}
-    emp_choices = st.multiselect(
-        "Filtrar colaboradores (opcional)",
-        options=all_emp_numbers,
-        default=all_emp_numbers[: min(len(all_emp_numbers), 20)],
-        format_func=lambda k: emp_display.get(k, k),
-        key="emp_filter_multiselect",
-    )
+    if _is_admin_o365():
+        # Admin vê multiselect
+        with st.spinner("A carregar colaboradores..."):
+            employees, emp_map, all_emp_numbers = _cached_employees_and_map(domain, client_id, refresh_token)
+        emp_display = {k: emp_map.get(k, k) for k in all_emp_numbers}
+        emp_choices = st.multiselect(
+            "Filtrar colaboradores (opcional)",
+            options=all_emp_numbers,
+            default=all_emp_numbers[: min(len(all_emp_numbers), 20)],
+            format_func=lambda k: emp_display.get(k, k),
+            key="emp_filter_multiselect",
+        )
+        client_for_calls = service_client
+    else:
+        # Utilizador normal: mapeia e-mail O365 → empNumber no OrangeHRM
+        email = st.session_state.get("o365_auth", {}).get("email", "")
+        if not email:
+            st.error("Não foi possível identificar o seu e‑mail.")
+            return
+        with st.spinner("A identificar o seu número de colaborador..."):
+            emp_number = _map_email_to_empnumber(service_client, email)
+        if not emp_number:
+            st.error("Não foi possível associar o seu e‑mail ao registo no OrangeHRM. Contacte o administrador.")
+            return
+        emp_choices = [str(emp_number)]
+        emp_map = {str(emp_number): st.session_state.get("o365_auth", {}).get("name") or "Eu"}
+        client_for_calls = service_client
 
     if run_btn:
-        if not emp_choices:
-            st.warning("Selecione pelo menos um colaborador.")
-            return
-
         with st.spinner("A obter folhas de horas e a calcular totais..."):
             rows = _get_totals_by_employee_and_timesheet(
-                client,
-                emp_choices,
-                emp_map,
-                from_date=from_date_str,
-                to_date=to_date_str,
+                client_for_calls, emp_choices, emp_map, from_date=from_date_str, to_date=to_date_str
             )
             pivot_df = _pivot_hours_by_employee_and_start(rows)
-
         st.subheader("Horas por Colaborador × Data de Início da Folha de Horas")
         if pivot_df.empty:
             st.info("Não foram encontrados dados para os filtros selecionados.")
