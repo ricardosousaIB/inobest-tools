@@ -8,6 +8,7 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     libjpeg62-turbo-dev \
     zlib1g-dev \
+    libzbar0 \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
