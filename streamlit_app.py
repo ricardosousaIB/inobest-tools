@@ -1488,7 +1488,7 @@ def render_orangehrm_pivot_tab():
 # Tabs
 # =============================
 
-tab1, tab2, tab3, tab4 = st.tabs(["Agregador de Excel", "SAF-T Faturação → CSV", "Extrator QR Code", "Configuração OAuth (Admin)", "Timesheets Pivot"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["Agregador de Excel", "SAF-T Faturação → CSV", "Extrator QR Code", "Configuração OAuth (Admin)", "Timesheets Pivot"])
 with tab1:
     excel_aggregator_app()
 with tab2:
