@@ -14,230 +14,213 @@ import tempfile
 # Configure page early
 st.set_page_config(layout="wide", page_title="Ferramentas Inobest — O365 + OrangeHRM")
 
-# =============================
-# QR Code Faturas
-# =============================
+import zipfile, tempfile, numpy as np, cv2
+from PIL import Image
+from pyzbar import pyzbar
 
-def converter_pdf_para_imagens(caminho_pdf):
-    """Converte PDF para imagens usando PyMuPDF"""
+# ---------- Utils QR ----------
+
+def converter_pdf_para_imagens(caminho_pdf, dpi=300):
+    """Converte PDF em imagens PIL usando PyMuPDF (fitz)."""
     try:
-        import fitz
+        import fitz  # PyMuPDF
         doc = fitz.open(caminho_pdf)
         imagens = []
-        
         for pagina in doc:
-            pix = pagina.get_pixmap(dpi=300)
+            pix = pagina.get_pixmap(dpi=dpi)
             img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
             imagens.append(img)
-        
         doc.close()
         return imagens
     except Exception as e:
-        st.error(f"Erro ao converter PDF: {e}")
-        return None
-
-def extrair_qr_de_imagem(imagem):
-    """Extrai QR code de uma imagem"""
-    if isinstance(imagem, Image.Image):
-        imagem = cv2.cvtColor(np.array(imagem), cv2.COLOR_RGB2BGR)
-    else:
-        imagem = cv2.imread(imagem)
-    
-    if imagem is None:
+        st.error(f"Erro a converter PDF: {e}")
         return []
-    
-    qr_codes = pyzbar.decode(imagem)
-    return qr_codes
 
+def _enhance_for_qr(img_bgr: np.ndarray) -> np.ndarray:
+    """Leve limpeza para melhorar leitura do QR."""
+    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+    # normalização + limiar adaptativo ajuda em PDFs rasterizados
+    gray = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX)
+    thr = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                cv2.THRESH_BINARY, 31, 5)
+    return cv2.cvtColor(thr, cv2.COLOR_GRAY2BGR)
 
-def extrair_qr_fatura(caminho_ficheiro):
-    """Extrai informação do QR code de uma fatura"""
-    extensao = os.path.splitext(caminho_ficheiro)[1].lower()
-    qr_codes = []
-    
+def _rotate_image(img_bgr: np.ndarray, angle: int) -> np.ndarray:
+    if angle == 0:
+        return img_bgr
+    if angle == 90:
+        return cv2.rotate(img_bgr, cv2.ROTATE_90_CLOCKWISE)
+    if angle == 180:
+        return cv2.rotate(img_bgr, cv2.ROTATE_180)
+    if angle == 270:
+        return cv2.rotate(img_bgr, cv2.ROTATE_90_COUNTERCLOCKWISE)
+    return img_bgr
+
+def _decode_qr_from_bgr(img_bgr: np.ndarray):
+    # Tenta melhoria + rotações
+    candidates = [img_bgr, _enhance_for_qr(img_bgr)]
+    for base in candidates:
+        for ang in (0, 90, 180, 270):
+            rotated = _rotate_image(base, ang)
+            codes = pyzbar.decode(rotated)
+            if codes:
+                return codes
+    return []
+
+def extrair_qr_de_imagem(input_image) -> list:
+    """Aceita PIL.Image ou caminho; devolve lista de códigos pyzbar."""
+    if isinstance(input_image, Image.Image):
+        img_bgr = cv2.cvtColor(np.array(input_image), cv2.COLOR_RGB2BGR)
+        return _decode_qr_from_bgr(img_bgr)
+    else:
+        img_bgr = cv2.imread(input_image)
+        if img_bgr is None:
+            return []
+        return _decode_qr_from_bgr(img_bgr)
+
+# ---------- Parser QR AT ----------
+
+def _parse_qr_at(qr_text: str) -> dict:
+    """
+    Parser genérico para QR de faturas PT (AT). O conteúdo tem campos tipo:
+    A:...,B:...,C:... separados por '*'. Alguns emissores omitem prefixo e usam só ordem.
+    Este parser aceita ambos: prefixed e posicional.
+    """
+    parts = [p for p in (qr_text or "").split("*") if p.strip()]
+    kv = {}
+    for p in parts:
+        if ":" in p:
+            k, v = p.split(":", 1)
+            kv[k.strip().upper()] = v.strip()
+        else:
+            # campo sem prefixo; adiciona por ordem como P0, P1...
+            idx = len([x for x in kv.keys() if x.startswith("P")])
+            kv[f"P{idx}"] = p.strip()
+
+    # Mapeamento preferido por prefixo AT (quando existe)
+    # A: NIF Emissor; B: NIF Adquirente; C: País; D: Tipo Doc; E: Estado; F: Data; G: Numero; H: ATCUD;
+    # I: Espaço Fiscal; J: Base; K: Total IVA; L: Total c/ IVA (há variações)
+    out = {
+        "NIF_Emitente": kv.get("A") or kv.get("P0", ""),
+        "NIF_Adquirente": kv.get("B") or kv.get("P1", ""),
+        "Pais": kv.get("C") or kv.get("P2", ""),
+        "Tipo_Documento": kv.get("D") or kv.get("P3", ""),
+        "Estado": kv.get("E") or kv.get("P4", ""),
+        "Data": kv.get("F") or kv.get("P5", ""),
+        "Numero_Fatura": kv.get("G") or kv.get("P6", ""),
+        "ATCUD": kv.get("H") or kv.get("P7", ""),
+        "Espaco_Fiscal": kv.get("I") or kv.get("P8", ""),
+        "Base_Tributavel": kv.get("J") or kv.get("P9", ""),
+        "Total_IVA": kv.get("K") or kv.get("P10", ""),
+        "Total_com_IVA": kv.get("L") or kv.get("P11", ""),
+    }
+    return out
+
+def extrair_qr_fatura(caminho_ficheiro: str) -> dict | None:
+    """Extrai primeiro QR encontrado do ficheiro (imagem/PDF) e devolve dict de campos normalizados."""
     try:
-        if extensao == '.pdf':
+        ext = os.path.splitext(caminho_ficheiro)[1].lower()
+        qr_codes = []
+        if ext == ".pdf":
             imagens = converter_pdf_para_imagens(caminho_ficheiro)
-            if not imagens:
-                return None
-            
-            for imagem in imagens:
-                qr_codes = extrair_qr_de_imagem(imagem)
+            for img in imagens:
+                qr_codes = extrair_qr_de_imagem(img)
                 if qr_codes:
                     break
         else:
-            imagem = cv2.imread(caminho_ficheiro)
-            qr_codes = pyzbar.decode(imagem)
-        
+            qr_codes = extrair_qr_de_imagem(caminho_ficheiro)
+
         if not qr_codes:
             return None
-        
-        qr_data = qr_codes[0].data.decode('utf-8')
-        campos = qr_data.split('*')
-        
-        # Função auxiliar para extrair valor após ":"
-        def extrair_valor(campo):
-            if ':' in campo:
-                return campo.split(':', 1)[1].strip()
-            return campo.strip()
-        
-        if len(campos) >= 8:
-            dados_fatura = {
-                'Ficheiro': os.path.basename(caminho_ficheiro),
-                'Status': 'Sucesso',
-                'NIF_Emitente': extrair_valor(campos[0]),
-                'NIF_Adquirente': extrair_valor(campos[1]),
-                'Pais': extrair_valor(campos[2]),
-                'Tipo_Documento': extrair_valor(campos[3]),
-                'Estado': extrair_valor(campos[4]),
-                'Data': extrair_valor(campos[5]),
-                'Numero_Fatura': extrair_valor(campos[6]),
-                'ATCUD': extrair_valor(campos[7]),
-                'Espaco_Fiscal': extrair_valor(campos[8]) if len(campos) > 8 else '',
-                'Base_Tributavel': extrair_valor(campos[9]) if len(campos) > 9 else '',
-                'Total_IVA': extrair_valor(campos[10]) if len(campos) > 10 else '',
-                'Total_com_IVA': extrair_valor(campos[11]) if len(campos) > 11 else '',
-            }
-            return dados_fatura
-    except Exception as e:
+
+        qr_data = qr_codes[0].data.decode("utf-8", errors="replace")
+        parsed = _parse_qr_at(qr_data)
+        return {
+            "Ficheiro": os.path.basename(caminho_ficheiro),
+            "Status": "Sucesso",
+            **parsed,
+        }
+    except Exception:
         return None
-    
-    return None
 
 def processar_zip(uploaded_file):
-    """Processa um ficheiro ZIP com faturas"""
-    # Criar pasta temporária
+    """Processa ZIP com faturas (PDF/JPG/PNG) e devolve lista de dicts."""
     with tempfile.TemporaryDirectory() as pasta_temp:
-        # Guardar ZIP temporariamente
         zip_path = os.path.join(pasta_temp, "upload.zip")
         with open(zip_path, "wb") as f:
             f.write(uploaded_file.getbuffer())
-        
-        # Extrair ZIP
+
         pasta_extraida = os.path.join(pasta_temp, "extraido")
-        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+        with zipfile.ZipFile(zip_path, "r") as zip_ref:
             zip_ref.extractall(pasta_extraida)
-        
-        # Processar ficheiros
+
         resultados = []
-        extensoes_validas = ['.pdf', '.jpg', '.jpeg', '.png']
-        
-        # Barra de progresso
-        ficheiros_para_processar = []
-        for root, dirs, files in os.walk(pasta_extraida):
-            for ficheiro in files:
-                extensao = os.path.splitext(ficheiro)[1].lower()
-                if extensao in extensoes_validas:
-                    ficheiros_para_processar.append((root, ficheiro))
-        
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        for idx, (root, ficheiro) in enumerate(ficheiros_para_processar):
-            caminho_completo = os.path.join(root, ficheiro)
-            status_text.text(f"A processar: {ficheiro} ({idx+1}/{len(ficheiros_para_processar)})")
-            
-            dados = extrair_qr_fatura(caminho_completo)
-            
-            if dados:
-                resultados.append(dados)
+        exts = {".pdf", ".jpg", ".jpeg", ".png"}
+        ficheiros = []
+        for root, _, files in os.walk(pasta_extraida):
+            for nome in files:
+                if os.path.splitext(nome)[1].lower() in exts:
+                    ficheiros.append(os.path.join(root, nome))
+
+        if not ficheiros:
+            return resultados
+
+        progress = st.progress(0)
+        info = st.empty()
+        total = len(ficheiros)
+        for i, caminho in enumerate(ficheiros, 1):
+            info.text(f"A processar: {os.path.basename(caminho)} ({i}/{total})")
+            data = extrair_qr_fatura(caminho)
+            if data:
+                resultados.append(data)
             else:
                 resultados.append({
-                    'Ficheiro': ficheiro,
-                    'Status': 'QR code não encontrado',
-                    'NIF_Emitente': '',
-                    'NIF_Adquirente': '',
-                    'Pais': '',
-                    'Tipo_Documento': '',
-                    'Estado': '',
-                    'Data': '',
-                    'Numero_Fatura': '',
-                    'ATCUD': '',
-                    'Espaco_Fiscal': '',
-                    'Base_Tributavel': '',
-                    'Total_IVA': '',
-                    'Total_com_IVA': '',
+                    "Ficheiro": os.path.basename(caminho),
+                    "Status": "QR code não encontrado",
+                    "NIF_Emitente": "", "NIF_Adquirente": "", "Pais": "",
+                    "Tipo_Documento": "", "Estado": "", "Data": "",
+                    "Numero_Fatura": "", "ATCUD": "", "Espaco_Fiscal": "",
+                    "Base_Tributavel": "", "Total_IVA": "", "Total_com_IVA": "",
                 })
-            
-            progress_bar.progress((idx + 1) / len(ficheiros_para_processar))
-        
-        status_text.empty()
-        progress_bar.empty()
-        
+            progress.progress(i/total)
+        info.empty(); progress.empty()
         return resultados
 
-# Interface principal
-st.title("📄 Extrator de Faturas")
-st.markdown("### Extraia dados de QR codes de faturas portuguesas")
-
-# Instruções
-with st.expander("📋 Como usar"):
-    st.markdown("""
-    1. **Prepare as faturas:** Coloque todas as faturas (PDF, JPG, PNG) numa pasta
-    2. **Comprima:** Crie um ficheiro ZIP com todas as faturas
-    3. **Upload:** Faça upload do ficheiro ZIP abaixo
-    4. **Descarregue:** Obtenha o CSV com todos os dados extraídos
-    
-    ℹ️ O sistema extrai automaticamente os dados do QR code de cada fatura.
-    """)
-
-st.markdown("---")
-
-# Upload do ficheiro
-uploaded_file = st.file_uploader(
-    "📦 Escolha um ficheiro ZIP com as faturas",
-    type=['zip'],
-    help="Selecione um ficheiro ZIP contendo as faturas em PDF, JPG ou PNG"
-)
-
-if uploaded_file is not None:
-    st.info(f"📁 Ficheiro carregado: **{uploaded_file.name}** ({uploaded_file.size / 1024:.2f} KB)")
-    
+# ---------- UI da Tab ----------
+def tab_extrator_qr():
+    st.header("📄 Extrator de Faturas (QR)")
+    with st.expander("Como usar"):
+        st.markdown("""
+        1) Coloque PDFs/Imagens das faturas numa pasta
+        2) Comprima em ZIP e faça upload
+        3) O sistema lê o QR e extrai os campos principais (ATCUD, NIFs, totais, etc.)
+        """)
+    uploaded_file = st.file_uploader("📦 Escolha um ficheiro ZIP com faturas (PDF/JPG/PNG)", type=["zip"])
+    if not uploaded_file:
+        st.info("Aguardo o seu ZIP...")
+        return
+    st.info(f"Ficheiro: {uploaded_file.name} ({uploaded_file.size/1024:.0f} KB)")
     if st.button("🚀 Processar Faturas", type="primary"):
-        with st.spinner('⏳ A processar faturas... Por favor aguarde.'):
+        with st.spinner("A processar faturas..."):
             resultados = processar_zip(uploaded_file)
-            
-            if resultados:
-                # Estatísticas
-                sucesso = sum(1 for r in resultados if r['Status'] == 'Sucesso')
-                falhas = len(resultados) - sucesso
-                
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Total", len(resultados))
-                with col2:
-                    st.metric("Sucesso", sucesso, delta=None if sucesso == 0 else "✓")
-                with col3:
-                    st.metric("Falhas", falhas, delta=None if falhas == 0 else "✗")
-                
-                st.success(f"✅ Processamento concluído!")
-                
-                # Criar DataFrame
-                df = pd.DataFrame(resultados)
-                
-                # Mostrar preview
-                st.markdown("### 📊 Preview dos dados")
-                st.dataframe(df, use_container_width=True)
-                
-                # Preparar CSV para download
-                csv = df.to_csv(index=False, encoding='utf-8-sig')
-                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-                
-                st.download_button(
-                    label="📥 Descarregar CSV",
-                    data=csv,
-                    file_name=f"faturas_{timestamp}.csv",
-                    mime="text/csv",
-                    type="primary"
-                )
-                
-                # Mostrar faturas com problemas
-                if falhas > 0:
-                    with st.expander(f"⚠️ Ver {falhas} fatura(s) com problemas"):
-                        df_falhas = df[df['Status'] != 'Sucesso']
-                        st.dataframe(df_falhas[['Ficheiro', 'Status']], use_container_width=True)
-            else:
-                st.error("❌ Nenhuma fatura foi processada. Verifique o conteúdo do ZIP.")
+            if not resultados:
+                st.error("Nenhuma fatura foi processada. Verifique o conteúdo do ZIP.")
+                return
+            df = pd.DataFrame(resultados)
+            sucesso = (df["Status"] == "Sucesso").sum()
+            falhas = len(df) - sucesso
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Total", len(df))
+            c2.metric("Sucesso", sucesso)
+            c3.metric("Falhas", falhas)
+            st.subheader("📊 Preview")
+            st.dataframe(df, use_container_width=True)
+            csv = df.to_csv(index=False, encoding="utf-8-sig")
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            st.download_button("📥 Descarregar CSV", data=csv, file_name=f"faturas_{ts}.csv", mime="text/csv", type="primary")
+            if falhas:
+                with st.expander(f"⚠️ Ver {falhas} fatura(s) sem QR"):
+                    st.dataframe(df[df["Status"] != "Sucesso"][["Ficheiro", "Status"]], use_container_width=True)
 
 # =============================
 # O365 AUTH (Global App Login)
@@ -1511,7 +1494,7 @@ with tab1:
 with tab2:
     saf_t_tab()
 with tab3:
-    extrair_qr_fatura()
+    tab_extrator_qr()
 with tab4:
     render_orangehrm_oauth_bootstrap_tab()
 with tab5:
