@@ -1,10 +1,15 @@
 import streamlit as st
-import io, zipfile, re, csv, os, time, requests, base64, hashlib, json, tempfile
+import io, zipfile, re, csv, os, time, requests, base64, hashlib, json, tempfile, shutil
 from urllib.parse import urlencode
 import xml.etree.ElementTree as ET
 import pandas as pd
 from typing import Optional, List, Dict, Any, Tuple
 from io import BytesIO, StringIO
+from datetime import datetime
+from pyzbar import pyzbar
+from PIL import Image
+import numpy as np
+import tempfile
 
 # Configure page early
 st.set_page_config(layout="wide", page_title="Ferramentas Inobest — O365 + OrangeHRM")
