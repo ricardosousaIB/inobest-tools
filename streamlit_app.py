@@ -10,6 +10,231 @@ from io import BytesIO, StringIO
 st.set_page_config(layout="wide", page_title="Ferramentas Inobest — O365 + OrangeHRM")
 
 # =============================
+# QR Code Faturas
+# =============================
+
+def converter_pdf_para_imagens(caminho_pdf):
+    """Converte PDF para imagens usando PyMuPDF"""
+    try:
+        import fitz
+        doc = fitz.open(caminho_pdf)
+        imagens = []
+        
+        for pagina in doc:
+            pix = pagina.get_pixmap(dpi=300)
+            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            imagens.append(img)
+        
+        doc.close()
+        return imagens
+    except Exception as e:
+        st.error(f"Erro ao converter PDF: {e}")
+        return None
+
+def extrair_qr_de_imagem(imagem):
+    """Extrai QR code de uma imagem"""
+    if isinstance(imagem, Image.Image):
+        imagem = cv2.cvtColor(np.array(imagem), cv2.COLOR_RGB2BGR)
+    else:
+        imagem = cv2.imread(imagem)
+    
+    if imagem is None:
+        return []
+    
+    qr_codes = pyzbar.decode(imagem)
+    return qr_codes
+
+
+def extrair_qr_fatura(caminho_ficheiro):
+    """Extrai informação do QR code de uma fatura"""
+    extensao = os.path.splitext(caminho_ficheiro)[1].lower()
+    qr_codes = []
+    
+    try:
+        if extensao == '.pdf':
+            imagens = converter_pdf_para_imagens(caminho_ficheiro)
+            if not imagens:
+                return None
+            
+            for imagem in imagens:
+                qr_codes = extrair_qr_de_imagem(imagem)
+                if qr_codes:
+                    break
+        else:
+            imagem = cv2.imread(caminho_ficheiro)
+            qr_codes = pyzbar.decode(imagem)
+        
+        if not qr_codes:
+            return None
+        
+        qr_data = qr_codes[0].data.decode('utf-8')
+        campos = qr_data.split('*')
+        
+        # Função auxiliar para extrair valor após ":"
+        def extrair_valor(campo):
+            if ':' in campo:
+                return campo.split(':', 1)[1].strip()
+            return campo.strip()
+        
+        if len(campos) >= 8:
+            dados_fatura = {
+                'Ficheiro': os.path.basename(caminho_ficheiro),
+                'Status': 'Sucesso',
+                'NIF_Emitente': extrair_valor(campos[0]),
+                'NIF_Adquirente': extrair_valor(campos[1]),
+                'Pais': extrair_valor(campos[2]),
+                'Tipo_Documento': extrair_valor(campos[3]),
+                'Estado': extrair_valor(campos[4]),
+                'Data': extrair_valor(campos[5]),
+                'Numero_Fatura': extrair_valor(campos[6]),
+                'ATCUD': extrair_valor(campos[7]),
+                'Espaco_Fiscal': extrair_valor(campos[8]) if len(campos) > 8 else '',
+                'Base_Tributavel': extrair_valor(campos[9]) if len(campos) > 9 else '',
+                'Total_IVA': extrair_valor(campos[10]) if len(campos) > 10 else '',
+                'Total_com_IVA': extrair_valor(campos[11]) if len(campos) > 11 else '',
+            }
+            return dados_fatura
+    except Exception as e:
+        return None
+    
+    return None
+
+def processar_zip(uploaded_file):
+    """Processa um ficheiro ZIP com faturas"""
+    # Criar pasta temporária
+    with tempfile.TemporaryDirectory() as pasta_temp:
+        # Guardar ZIP temporariamente
+        zip_path = os.path.join(pasta_temp, "upload.zip")
+        with open(zip_path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+        
+        # Extrair ZIP
+        pasta_extraida = os.path.join(pasta_temp, "extraido")
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            zip_ref.extractall(pasta_extraida)
+        
+        # Processar ficheiros
+        resultados = []
+        extensoes_validas = ['.pdf', '.jpg', '.jpeg', '.png']
+        
+        # Barra de progresso
+        ficheiros_para_processar = []
+        for root, dirs, files in os.walk(pasta_extraida):
+            for ficheiro in files:
+                extensao = os.path.splitext(ficheiro)[1].lower()
+                if extensao in extensoes_validas:
+                    ficheiros_para_processar.append((root, ficheiro))
+        
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        for idx, (root, ficheiro) in enumerate(ficheiros_para_processar):
+            caminho_completo = os.path.join(root, ficheiro)
+            status_text.text(f"A processar: {ficheiro} ({idx+1}/{len(ficheiros_para_processar)})")
+            
+            dados = extrair_qr_fatura(caminho_completo)
+            
+            if dados:
+                resultados.append(dados)
+            else:
+                resultados.append({
+                    'Ficheiro': ficheiro,
+                    'Status': 'QR code não encontrado',
+                    'NIF_Emitente': '',
+                    'NIF_Adquirente': '',
+                    'Pais': '',
+                    'Tipo_Documento': '',
+                    'Estado': '',
+                    'Data': '',
+                    'Numero_Fatura': '',
+                    'ATCUD': '',
+                    'Espaco_Fiscal': '',
+                    'Base_Tributavel': '',
+                    'Total_IVA': '',
+                    'Total_com_IVA': '',
+                })
+            
+            progress_bar.progress((idx + 1) / len(ficheiros_para_processar))
+        
+        status_text.empty()
+        progress_bar.empty()
+        
+        return resultados
+
+# Interface principal
+st.title("📄 Extrator de Faturas")
+st.markdown("### Extraia dados de QR codes de faturas portuguesas")
+
+# Instruções
+with st.expander("📋 Como usar"):
+    st.markdown("""
+    1. **Prepare as faturas:** Coloque todas as faturas (PDF, JPG, PNG) numa pasta
+    2. **Comprima:** Crie um ficheiro ZIP com todas as faturas
+    3. **Upload:** Faça upload do ficheiro ZIP abaixo
+    4. **Descarregue:** Obtenha o CSV com todos os dados extraídos
+    
+    ℹ️ O sistema extrai automaticamente os dados do QR code de cada fatura.
+    """)
+
+st.markdown("---")
+
+# Upload do ficheiro
+uploaded_file = st.file_uploader(
+    "📦 Escolha um ficheiro ZIP com as faturas",
+    type=['zip'],
+    help="Selecione um ficheiro ZIP contendo as faturas em PDF, JPG ou PNG"
+)
+
+if uploaded_file is not None:
+    st.info(f"📁 Ficheiro carregado: **{uploaded_file.name}** ({uploaded_file.size / 1024:.2f} KB)")
+    
+    if st.button("🚀 Processar Faturas", type="primary"):
+        with st.spinner('⏳ A processar faturas... Por favor aguarde.'):
+            resultados = processar_zip(uploaded_file)
+            
+            if resultados:
+                # Estatísticas
+                sucesso = sum(1 for r in resultados if r['Status'] == 'Sucesso')
+                falhas = len(resultados) - sucesso
+                
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Total", len(resultados))
+                with col2:
+                    st.metric("Sucesso", sucesso, delta=None if sucesso == 0 else "✓")
+                with col3:
+                    st.metric("Falhas", falhas, delta=None if falhas == 0 else "✗")
+                
+                st.success(f"✅ Processamento concluído!")
+                
+                # Criar DataFrame
+                df = pd.DataFrame(resultados)
+                
+                # Mostrar preview
+                st.markdown("### 📊 Preview dos dados")
+                st.dataframe(df, use_container_width=True)
+                
+                # Preparar CSV para download
+                csv = df.to_csv(index=False, encoding='utf-8-sig')
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                
+                st.download_button(
+                    label="📥 Descarregar CSV",
+                    data=csv,
+                    file_name=f"faturas_{timestamp}.csv",
+                    mime="text/csv",
+                    type="primary"
+                )
+                
+                # Mostrar faturas com problemas
+                if falhas > 0:
+                    with st.expander(f"⚠️ Ver {falhas} fatura(s) com problemas"):
+                        df_falhas = df[df['Status'] != 'Sucesso']
+                        st.dataframe(df_falhas[['Ficheiro', 'Status']], use_container_width=True)
+            else:
+                st.error("❌ Nenhuma fatura foi processada. Verifique o conteúdo do ZIP.")
+
+# =============================
 # O365 AUTH (Global App Login)
 # =============================
 
@@ -1275,12 +1500,14 @@ def render_orangehrm_pivot_tab():
 # Tabs
 # =============================
 
-tab1, tab2, tab3, tab4 = st.tabs(["Agregador de Excel", "SAF-T Faturação → CSV", "Configuração OAuth (Admin)", "Timesheets Pivot"])
+tab1, tab2, tab3, tab4 = st.tabs(["Agregador de Excel", "SAF-T Faturação → CSV", "Extrator QR Code", "Configuração OAuth (Admin)", "Timesheets Pivot"])
 with tab1:
     excel_aggregator_app()
 with tab2:
     saf_t_tab()
 with tab3:
-    render_orangehrm_oauth_bootstrap_tab()
+    extrair_qr_fatura()
 with tab4:
+    render_orangehrm_oauth_bootstrap_tab()
+with tab5:
     render_orangehrm_pivot_tab()
