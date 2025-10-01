@@ -116,7 +116,7 @@ def _parse_qr_at(qr_text: str) -> dict:
     }
     return out
 
-def extrair_qr_fatura(caminho_ficheiro: str) -> dict | None:
+def extrair_qr_fatura(caminho_ficheiro: str) -> Optional[Dict[str, Any]]:
     """Extrai primeiro QR encontrado do ficheiro (imagem/PDF) e devolve dict de campos normalizados."""
     try:
         ext = os.path.splitext(caminho_ficheiro)[1].lower()
