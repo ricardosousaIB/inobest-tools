@@ -2,3 +2,8 @@ streamlit
 pandas
 requests
 openpyxl
+opencv-python-headless
+pyzbar
+pymupdf
+pillow
+numpy
