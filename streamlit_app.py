@@ -11,7 +11,7 @@ from PIL import Image
 import numpy as np
 import tempfile
 
-# Configure page early
+# Configuração da página
 st.set_page_config(layout="wide", page_title="Ferramentas Inobest — O365 + OrangeHRM")
 
 import zipfile, tempfile, numpy as np, cv2
