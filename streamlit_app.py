@@ -922,7 +922,7 @@ def _list_all_employees(client: _OrangeHRMClient, limit: int = 200) -> List[Dict
     results, offset = [], 0
     while True:
         params = {"limit": limit, "offset": offset}
-        data = client.request("GET", "pim/employees", params=params)
+        data = client.request("GET", "pim/employees?includeEmployees=currentAndPast", params=params)
         rows = []
         if isinstance(data, dict) and "data" in data and isinstance(data["data"], list):
             rows = data["data"]
