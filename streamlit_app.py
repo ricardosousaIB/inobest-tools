@@ -1237,7 +1237,7 @@ def _map_email_to_empnumber(client: _OrangeHRMClient, email: str) -> Optional[st
 
     # 1) Tentativa por e-mail (workEmail) via PIM
     try:
-        data = client.request("GET", f"pim/employees?limit=50&email={email_l}")
+        data = client.request("GET", f"pim/employees?limit=50&includeEmployees=currentAndPast&email={email_l}")
         if isinstance(data, dict):
             arr = data.get("data") or data.get("employees") or []
             for emp in arr:
